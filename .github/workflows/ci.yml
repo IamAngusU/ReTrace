@@ -44,6 +44,11 @@ jobs:
           $folderArguments = @('--source', ('"' + $folder + '"'), '--verify-folder-workbench', ('"' + $folderProof + '"'), '--render-preview', ('"' + $folderImage + '"'))
           $process = Start-Process -FilePath $executable -ArgumentList $folderArguments -WindowStyle Hidden -Wait -PassThru
           if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $folderProof)) { throw 'Hidden-container workflow failed.' }
+          $handoffProof = Join-Path $env:RUNNER_TEMP 'retrace-folder-handoff.json'
+          $handoffImage = Join-Path $env:RUNNER_TEMP 'retrace-folder-handoff.png'
+          $handoffArguments = @('--source', ('"' + $folder + '"'), '--verify-source-handoff', ('"' + $handoffProof + '"'), '--render-preview', ('"' + $handoffImage + '"'))
+          $process = Start-Process -FilePath $executable -ArgumentList $handoffArguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $handoffProof)) { throw 'Folder handoff selected the wrong profile or scanned automatically.' }
           $bin = Join-Path $env:RUNNER_TEMP 'retrace-copied-bin'
           New-Item -ItemType Directory -Path $bin | Out-Null
           Copy-Item -LiteralPath $fixture -Destination (Join-Path $bin '$Rci0001.img')

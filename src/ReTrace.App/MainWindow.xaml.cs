@@ -48,7 +48,15 @@ public partial class MainWindow : Window
         ready = true;
         using (var identity = WindowsIdentity.GetCurrent()) ElevateButton.Visibility = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator) ? Visibility.Collapsed : Visibility.Visible;
         if (arguments.Contains("--light", StringComparer.Ordinal)) ApplyTheme(true);
-        if (ArgumentValue("--source") is { } source) SourceBox.Text = source;
+        if (ArgumentValue("--source") is { } source)
+        {
+            SourceBox.Text = source;
+            if (IsLocalFolderArgument(source))
+            {
+                FolderSourceBox.Text = Path.GetFullPath(source);
+                SourceMode.SelectedIndex = 3;
+            }
+        }
         timer.Tick += (_, _) => RenderProgress();
         CommandBindings.Add(new CommandBinding(ApplicationCommands.Open, (_, _) => PickSource_Click(this, new RoutedEventArgs())));
         Loaded += Window_Loaded;
@@ -60,7 +68,8 @@ public partial class MainWindow : Window
         try
         {
             if (arguments.Contains("--capture", StringComparer.Ordinal)) SourceMode.SelectedIndex = 1;
-            if (ArgumentValue("--verify-recycle-workbench") is { } recycleProof) await VerifyRecycleWorkbenchAsync(recycleProof);
+            if (ArgumentValue("--verify-source-handoff") is { } handoffProof) VerifySourceHandoff(handoffProof);
+            else if (ArgumentValue("--verify-recycle-workbench") is { } recycleProof) await VerifyRecycleWorkbenchAsync(recycleProof);
             else if (ArgumentValue("--verify-folder-workbench") is { } folderProof) await VerifyFolderWorkbenchAsync(folderProof);
             else if (ArgumentValue("--verify-documents-workbench") is { } documentsProof) await VerifyDocumentsProfileAsync(documentsProof);
             else if (ArgumentValue("--verify-session-workbench") is { } sessionProof) await VerifySessionWorkbenchAsync(sessionProof);
@@ -80,6 +89,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             ShowFailure(ex);
+            if (ArgumentValue("--verify-source-handoff") is { } handoffProof) WriteNewJson(handoffProof + ".error.json", new { error = ex.ToString() });
             if (ArgumentValue("--verify-workbench") is { } proof) WriteNewJson(proof + ".error.json", new { error = ex.ToString() });
             if (ArgumentValue("--verify-cancel") is { } cancelProof) WriteNewJson(cancelProof + ".error.json", new { error = ex.ToString() });
             if (ArgumentValue("--verify-deep-workbench") is { } deepProof) WriteNewJson(deepProof + ".error.json", new { error = ex.ToString() });
@@ -101,6 +111,24 @@ public partial class MainWindow : Window
     {
         var index = Array.IndexOf(arguments, key);
         return index >= 0 && index + 1 < arguments.Length ? arguments[index + 1] : null;
+    }
+
+    private static bool IsLocalFolderArgument(string source)
+    {
+        try { return Directory.Exists(PathSafety.CheckPath(source, mustExist: false)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { return false; }
+    }
+
+    private void VerifySourceHandoff(string proof)
+    {
+        string source = ArgumentValue("--source") ?? throw new InvalidDataException("An explicit --source is required.");
+        bool folder = IsLocalFolderArgument(source);
+        string selected = folder ? FolderSourceBox.Text : SourceBox.Text;
+        if (SourceMode.SelectedIndex != (folder ? 3 : 0) || Path.GetFullPath(selected) != Path.GetFullPath(source) ||
+            busy || report is not null || folderReport is not null || recycleReport is not null)
+            throw new InvalidDataException("Source handoff did not select the correct profile without scanning.");
+        WriteNewJson(proof, new { schema = "retrace.source-handoff-verification.v1", source_kind = folder ? "folder" : "image",
+            source_selected = true, scan_started = false, mode = SourceMode.SelectedIndex });
     }
 
     private async void Scan_Click(object sender, RoutedEventArgs e) => await GuardAsync(() => SourceMode.SelectedIndex switch { 2 => ScanRecycleAsync(), 3 => ScanFolderAsync(), _ => ScanAsync() });
