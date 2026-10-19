@@ -6,7 +6,7 @@ mit Dark-/Lightmode, lokalem Suchkern, mitgeliefertem PhotoRec, begrenzter
 Bildvorschau, Mehrfachauswahl und geprüfter Kopier-Rettung. Kein TraceLedger,
 Python, Konto, Internetdienst oder Kali-Start zur Benutzung erforderlich.
 
-**Erste Vorschauversion: 0.1.0-alpha.1.** Eine gefundene Signatur ist noch keine
+**Aktuelle Vorschauversion: 0.1.0-alpha.3.** Eine gefundene Signatur ist noch keine
 nachgewiesen gelöschte oder vollständige Datei. ReTrace unterscheidet vollständige
 unterstützte Dateistrukturen, teilweise/beschädigte Bilder und ungeprüfte Funde.
 Lesbare Vorschauen sind ein zusätzlicher Decoder-Test, kein Beweis für das
@@ -15,19 +15,22 @@ vollständige ursprüngliche Bild. Fehlende Bytes werden nicht erfunden.
 ## Benutzen
 
 1. `ReTrace.exe` aus dem vollständigen portablen Ordner öffnen.
-2. Ein vorhandenes Abbild auswählen. Alternativ **Laufwerk als Abbild sichern**:
-   das gewählte Laufwerk wird ausschließlich gelesen; das neue Abbild muss auf
-   einen anderen erkannten Datenträger passen. Administratorrechte werden nur
-   für diesen gewählten Zugriff benötigt. Der Administrator-Button startet die
-   eigene App nach einem ausdrücklichen Klick mit Windows-UAC neu.
-3. **Bildsuche** untersucht JPEG-/PNG-Strukturen mit echtem Bytefortschritt.
-   **Tiefensuche** verwendet das enthaltene, gepinnte Windows-PhotoRec 7.2.
-   Standardmäßig werden Bilder gesucht; **Alle PhotoRec-Dateitypen** erweitert
-   die Signatursuche unter anderem auf Dokumente und Archive. Allgemeine Funde
+2. **Quelle** wählen: Papierkorb, einen Ordner mit möglichen Kopien oder ein
+   vorhandenes Datenträgerabbild. Der Papierkorb ist die Standardansicht;
+   erst ein ausdrücklicher Suchstart liest den gewählten Bestand.
+3. Die passende Suche starten. Ordner untersuchen reguläre Dateien einschließlich
+   versteckter Container. Bei Abbildern bietet **Bildsuche** native JPEG-/PNG-
+   Prüfung und **Tiefensuche** das gepinnte PhotoRec 7.2. Dessen Profile Fotos,
+   Dokumente oder alle Typen sind echte Suchoptionen; allgemeine Signaturfunde
    können Fehlkandidaten sein und bleiben ungeprüft.
 4. Ganze oder teilweise lesbare Bilder ansehen, filtern und auswählen.
 5. **Auswahl sichern** erzeugt einen neuen Rettungsordner. Jede aufgeführte Kopie
    wird mit SHA-256 geprüft. Vorhandene Dateien oder Ordner werden nicht ersetzt.
+
+**Laufwerk als Abbild sichern** liest ein ausgewähltes Laufwerk in eine neue
+Abbilddatei auf einem anderen erkannten Datenträger. Dafür kann ein ausdrücklicher
+Neustart als Administrator über Windows-UAC nötig sein. Papierkorb-, Ordner- und
+reguläre Abbilddateien benötigen diesen Rohzugriff nicht.
 
 Möglichst wenig auf das betroffene Laufwerk schreiben. Ein zweiter Buchstabe
 auf derselben Platte ist kein zweiter Datenträger. Für die Aufnahme prüft
@@ -56,6 +59,36 @@ kein VSS-/Dateisystem-Snapshot und repariert oder sperrt das Quelllaufwerk nicht
 - Laufwerksabbilder als neue Datei mit Protokoll anlegen und den geschriebenen
   Bestand unabhängig erneut per SHA-256 prüfen. Abbruch oder Lesefehler behalten
   einen ausdrücklich unvollständigen Bestand mit bekannter Präfixlänge.
+
+## Papierkorb und weitere Fundquellen
+
+Beim Start ist jetzt der **Windows-Papierkorb des aktuellen Benutzers** gewählt.
+Eine ausdrückliche Suche liest die lokalen Papierkorb-Metadaten, zeigt Originalpfad,
+Löschzeit, Größe und den Zustand des Dateipaars. **Auswahl sichern** kopiert die
+gewählten regulären Dateien in einen neuen Ordner und prüft die tatsächlich
+geschriebenen Bytes unabhängig mit SHA-256. Es entfernt keine Papierkorbeinträge
+und verwendet den berichteten Originalpfad niemals als Schreibziel.
+Verzeichniseinträge sind sichtbar, werden in diesem Profil noch nicht rekursiv gerettet.
+
+**Ordner, Backups und Cache** durchsucht ausdrücklich gewählte lokale Ordner
+rekursiv, einschließlich versteckter regulärer Dateien und Bilddaten in Containern
+unabhängig von der Dateiendung. So können etwa JPEG-/PNG-Kopien in .bak-, .tmp-
+oder Cachedateien auffallen. Die Vorschau und Sicherung bleiben an die genaue
+Quelldatei und ihren Bytebereich gebunden. Ein Cachebild kann eine verkleinerte
+Vorschau sein; Signaturfunde belegen keinen früheren Löschvorgang.
+
+Das Ordnerprofil liest standardmäßig höchstens 256 Dateien, 512 MiB Quelldaten,
+128 MiB pro Container und acht Verzeichnisebenen. Ausgelassene Bereiche und
+Abbruchgrenzen ergeben ausdrücklich partielle Ergebnisse. Links, alternative
+Datenströme und Archive werden durch dieses Profil nicht verfolgt oder entpackt.
+
+Nach dem Leeren des Papierkorbs müssen Dateisystemeinträge oder nicht
+überschriebene Datenträgerbereiche untersucht werden: dafür bleiben die
+Abbildsuche/PhotoRec und die vorhandenen TSK-Dateisystemprofile in TraceLedger
+zuständig. Frühere Versionen und File-History-Backups sind weitere mögliche
+Quellen. Der TL-Quellenfinder unterscheidet zugängliche Kopien, nur vorhandene
+Metadaten und Quellen, die weitere Zugriffsrechte benötigen; er erstellt keine
+Snapshots und behauptet keine gesicherte Originaldatei aus einer Cache-Präsenz.
 
 ## Untersuchungen später fortsetzen
 

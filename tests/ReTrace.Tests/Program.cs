@@ -8,6 +8,11 @@ if (args is ["--list-volumes"])
     Console.WriteLine(JsonSerializer.Serialize(VolumeAcquisition.ListVolumes()));
     return 0;
 }
+if (args is ["--scan-recycle", var copiedBin])
+{
+    Console.WriteLine(JsonSerializer.Serialize(await RecycleBinRecovery.ScanAsync(Path.GetFullPath(copiedBin))));
+    return 0;
+}
 if (args is ["--write-fixture", var destination])
 {
     var path = Path.GetFullPath(destination);
@@ -26,6 +31,8 @@ try
     checks["photorec"] = await PhotoRecTests.RunAsync();
     checks["large_images"] = await LargeImageTests.RunAsync();
     checks["investigations"] = await InvestigationTests.RunAsync();
+    checks["folders"] = await FolderRecoveryTests.RunAsync();
+    checks["recycle_bin"] = await RecycleBinTests.RunAsync();
     Console.WriteLine(JsonSerializer.Serialize(new { status = "passed", assertions = checks.Values.Sum(), suites = checks }));
     return 0;
 }

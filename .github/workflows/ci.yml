@@ -35,3 +35,33 @@ jobs:
           $sessionArguments = @('--source', ('"' + $fixture + '"'), '--verify-session-workbench', ('"' + $session + '"'), '--render-preview', ('"' + $sessionImage + '"'))
           $process = Start-Process -FilePath $executable -ArgumentList $sessionArguments -WindowStyle Hidden -Wait -PassThru
           if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $session)) { throw 'Saved investigation workflow failed.' }
+          $folder = Join-Path $env:RUNNER_TEMP 'retrace-owned-folder'
+          New-Item -ItemType Directory -Path $folder | Out-Null
+          Copy-Item -LiteralPath $fixture -Destination (Join-Path $folder 'hidden-cache.bin')
+          [IO.File]::SetAttributes((Join-Path $folder 'hidden-cache.bin'), [IO.FileAttributes]::Hidden)
+          $folderProof = Join-Path $env:RUNNER_TEMP 'retrace-folder-proof.json'
+          $folderImage = Join-Path $env:RUNNER_TEMP 'retrace-folder-preview.png'
+          $folderArguments = @('--source', ('"' + $folder + '"'), '--verify-folder-workbench', ('"' + $folderProof + '"'), '--render-preview', ('"' + $folderImage + '"'))
+          $process = Start-Process -FilePath $executable -ArgumentList $folderArguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $folderProof)) { throw 'Hidden-container workflow failed.' }
+          $bin = Join-Path $env:RUNNER_TEMP 'retrace-copied-bin'
+          New-Item -ItemType Directory -Path $bin | Out-Null
+          Copy-Item -LiteralPath $fixture -Destination (Join-Path $bin '$Rci0001.img')
+          $original = (Join-Path $env:RUNNER_TEMP 'owned-deleted-fixture.img') + [char]0
+          $writer = [IO.BinaryWriter]::new([IO.File]::Create((Join-Path $bin '$Ici0001.img')))
+          try {
+            $writer.Write([UInt64]2)
+            $writer.Write([UInt64](Get-Item -LiteralPath $fixture).Length)
+            $writer.Write([Int64][DateTime]::UtcNow.ToFileTimeUtc())
+            $writer.Write([UInt32]$original.Length)
+            $writer.Write([Text.Encoding]::Unicode.GetBytes($original))
+          } finally { $writer.Dispose() }
+          $inventory = dotnet run --no-build --project tests/ReTrace.Tests/ReTrace.Tests.csproj -c Release -- --scan-recycle $bin | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Copied-bin fixture inventory failed.' }
+          $entry = @($inventory.Entries | Where-Object CanRecover)[0]
+          if (!$entry) { throw 'Copied-bin fixture has no recoverable entry.' }
+          $binProof = Join-Path $env:RUNNER_TEMP 'retrace-recycle-proof.json'
+          $binImage = Join-Path $env:RUNNER_TEMP 'retrace-recycle-preview.png'
+          $binArguments = @('--verify-recycle-workbench', ('"' + $binProof + '"'), '--recycle-root', ('"' + $bin + '"'), '--recycle-entry', $entry.Id, '--render-preview', ('"' + $binImage + '"'))
+          $process = Start-Process -FilePath $executable -ArgumentList $binArguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $binProof)) { throw 'Copied-bin verified-copy workflow failed.' }

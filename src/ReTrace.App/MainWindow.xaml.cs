@@ -37,11 +37,12 @@ public partial class MainWindow : Window
         this.arguments = arguments;
         InitializeComponent();
         CandidatesGrid.ItemsSource = visible;
+        RecycleGrid.ItemsSource = recycleRows;
         KindFilter.ItemsSource = new[] { "Alle Formate" };
         KindFilter.SelectedIndex = 0;
         StateFilter.ItemsSource = new[] { "Alle Zustände", "Struktur vollständig", "Teilweise", "Fragment", "Ungeprüft / unbekannt" };
         StateFilter.SelectedIndex = 0;
-        SourceMode.SelectedIndex = 0;
+        SourceMode.SelectedIndex = ArgumentValue("--source") is not null || ArgumentValue("--case") is not null ? 0 : 2;
         EngineBox.SelectedIndex = 0;
         DeepScopeBox.SelectedIndex = 0;
         ready = true;
@@ -59,7 +60,9 @@ public partial class MainWindow : Window
         try
         {
             if (arguments.Contains("--capture", StringComparer.Ordinal)) SourceMode.SelectedIndex = 1;
-            if (ArgumentValue("--verify-documents-workbench") is { } documentsProof) await VerifyDocumentsProfileAsync(documentsProof);
+            if (ArgumentValue("--verify-recycle-workbench") is { } recycleProof) await VerifyRecycleWorkbenchAsync(recycleProof);
+            else if (ArgumentValue("--verify-folder-workbench") is { } folderProof) await VerifyFolderWorkbenchAsync(folderProof);
+            else if (ArgumentValue("--verify-documents-workbench") is { } documentsProof) await VerifyDocumentsProfileAsync(documentsProof);
             else if (ArgumentValue("--verify-session-workbench") is { } sessionProof) await VerifySessionWorkbenchAsync(sessionProof);
             else if (ArgumentValue("--case") is { } savedCase) await LoadCaseAsync(savedCase);
             else if (ArgumentValue("--verify-cancel") is { } cancelProof) await VerifyCancellationAsync(cancelProof);
@@ -82,6 +85,8 @@ public partial class MainWindow : Window
             if (ArgumentValue("--verify-deep-workbench") is { } deepProof) WriteNewJson(deepProof + ".error.json", new { error = ex.ToString() });
             if (ArgumentValue("--verify-session-workbench") is { } sessionProof) WriteNewJson(sessionProof + ".error.json", new { error = ex.ToString() });
             if (ArgumentValue("--verify-documents-workbench") is { } documentsProof) WriteNewJson(documentsProof + ".error.json", new { error = ex.ToString() });
+            if (ArgumentValue("--verify-recycle-workbench") is { } recycleProof) WriteNewJson(recycleProof + ".error.json", new { error = ex.ToString() });
+            if (ArgumentValue("--verify-folder-workbench") is { } folderProof) WriteNewJson(folderProof + ".error.json", new { error = ex.ToString() });
             if (ArgumentValue("--render-preview") is { } png)
             {
                 try { CaptureWindow(png); } catch (IOException) { }
@@ -98,7 +103,7 @@ public partial class MainWindow : Window
         return index >= 0 && index + 1 < arguments.Length ? arguments[index + 1] : null;
     }
 
-    private async void Scan_Click(object sender, RoutedEventArgs e) => await GuardAsync(() => ScanAsync());
+    private async void Scan_Click(object sender, RoutedEventArgs e) => await GuardAsync(() => SourceMode.SelectedIndex switch { 2 => ScanRecycleAsync(), 3 => ScanFolderAsync(), _ => ScanAsync() });
 
     private async Task ScanAsync(string? explicitDeepWork = null)
     {
@@ -207,6 +212,13 @@ public partial class MainWindow : Window
             ProgressDetail.Text = $"{p.Candidates:N0} bisherige Funde · {FormatBytes(p.BytesDone)} Funddaten" + (p.BytesTotal > 0 ? $" · Grenze {FormatBytes(p.BytesTotal)}" : "") + $" · {clock.Elapsed.TotalSeconds:N0} s · Scanfortschritt nicht verfügbar";
             return;
         }
+        if (p.Stage is "recycle_inventory" or "folder_inventory")
+        {
+            WorkProgress.IsIndeterminate = true;
+            StatusLabel.Text = p.Stage == "recycle_inventory" ? "Papierkorb-Einträge werden gelesen…" : "Ordnerdateien werden erfasst…";
+            ProgressDetail.Text = $"{p.BytesDone:N0} Einträge erfasst · {clock.Elapsed.TotalSeconds:N0} s · Aufzählung ohne vollständigen Gesamtzähler";
+            return;
+        }
         var ratio = p.BytesTotal > 0 ? Math.Clamp(100.0 * p.BytesDone / p.BytesTotal, 0, 100) : 0;
         WorkProgress.IsIndeterminate = p.BytesTotal <= 0;
         WorkProgress.Value = ratio;
@@ -233,8 +245,24 @@ public partial class MainWindow : Window
     {
         if (ImagePanel is null || DrivePanel is null) return;
         var drive = SourceMode.SelectedIndex == 1;
-        ImagePanel.Visibility = drive ? Visibility.Collapsed : Visibility.Visible;
+        var recycle = SourceMode.SelectedIndex == 2;
+        var folder = SourceMode.SelectedIndex == 3;
+        ImagePanel.Visibility = SourceMode.SelectedIndex == 0 ? Visibility.Visible : Visibility.Collapsed;
         DrivePanel.Visibility = drive ? Visibility.Visible : Visibility.Collapsed;
+        if (RecycleSourcePanel is not null) RecycleSourcePanel.Visibility = recycle ? Visibility.Visible : Visibility.Collapsed;
+        if (FolderSourcePanel is not null) FolderSourcePanel.Visibility = folder ? Visibility.Visible : Visibility.Collapsed;
+        if (ImageSearchSettings is not null) ImageSearchSettings.Visibility = recycle ? Visibility.Collapsed : Visibility.Visible;
+        if (ImageResultsPanel is not null) ImageResultsPanel.Visibility = recycle ? Visibility.Collapsed : Visibility.Visible;
+        if (RecycleResultsPanel is not null) RecycleResultsPanel.Visibility = recycle ? Visibility.Visible : Visibility.Collapsed;
+        if (EngineBox is not null) EngineBox.Visibility = folder ? Visibility.Collapsed : Visibility.Visible;
+        if (FolderLimitsPanel is not null) FolderLimitsPanel.Visibility = folder ? Visibility.Visible : Visibility.Collapsed;
+        if (SearchModeLabel is not null) SearchModeLabel.Text = folder ? "Bilddaten in vorhandenen Dateien" : "Suchmodus";
+        if (DeepScopePanel is not null) DeepScopePanel.Visibility = !folder && EngineBox?.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
+        if (DeepLimitsPanel is not null) DeepLimitsPanel.Visibility = !folder && EngineBox?.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
+        if (folder && EngineDescription is not null) EngineDescription.Text = "Integrierte JPEG-/PNG-Suche mit Quellpfad, Dateioffset und geprüften Kopien. Ein Fund belegt vorhandene Bytes; das vollständige frühere Original ist damit nicht nachgewiesen.";
+        else if (!recycle && EngineDescription is not null) EngineDescription.Text = EngineBox?.SelectedIndex == 1 ? "PhotoRec sucht weitere Dateitypen und kann beschädigte Dateien behalten. Benötigt einen eigenen Arbeitsordner für gefundene Kopien." : "Sucht Bildsignaturen direkt im Abbild. Erkennt vollständige Strukturen und kennzeichnet beschädigte oder abgeschnittene Funde.";
+        if (ready && !recycle) { if (folder) ApplyFolderView(); else if (report is not null) ApplyReport(report); else RefreshCandidates(); }
+        if (ScanButton is not null) ScanButton.Content = recycle ? "Papierkorb lesen" : folder ? "Ordner durchsuchen" : EngineBox?.SelectedIndex == 1 ? "Tiefensuche starten" : "Bilder suchen";
         if (ready && drive && VolumesBox.Items.Count == 0) await GuardAsync(RefreshVolumesAsync);
         UpdateControls();
     }
@@ -247,7 +275,7 @@ public partial class MainWindow : Window
             : "Sucht Bildsignaturen direkt im Abbild. Erkennt vollständige Strukturen und kennzeichnet beschädigte oder abgeschnittene Funde.";
         if (DeepScopePanel is not null) DeepScopePanel.Visibility = EngineBox.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
         if (DeepLimitsPanel is not null) DeepLimitsPanel.Visibility = EngineBox.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
-        if (ScanButton is not null) ScanButton.Content = EngineBox.SelectedIndex == 1 ? "Tiefensuche starten" : "Bilder suchen";
+        if (ScanButton is not null) ScanButton.Content = SourceMode.SelectedIndex == 2 ? "Papierkorb lesen" : SourceMode.SelectedIndex == 3 ? "Ordner durchsuchen" : EngineBox.SelectedIndex == 1 ? "Tiefensuche starten" : "Bilder suchen";
     }
 
     private async void RefreshVolumes_Click(object sender, RoutedEventArgs e) => await GuardAsync(RefreshVolumesAsync);
@@ -306,6 +334,7 @@ public partial class MainWindow : Window
     private void Filter_Changed(object sender, SelectionChangedEventArgs e) { if (ready) RefreshCandidates(); }
     private void RefreshCandidates()
     {
+        if (SourceMode.SelectedIndex == 3) { RefreshFolderCandidates(); return; }
         if (report is null) return;
         var kind = KindFilter.SelectedItem as string ?? "Alle Formate";
         var state = StateFilter.SelectedIndex;
@@ -325,12 +354,12 @@ public partial class MainWindow : Window
     private async void Selection_Changed(object sender, SelectionChangedEventArgs e)
     {
         UpdateControls();
-        if (CandidatesGrid.SelectedItem is CandidateRow row) await PreviewAsync(row.Candidate);
+        if (CandidatesGrid.SelectedItem is CandidateRow row) await PreviewAsync(row.Candidate, row.SourceReport);
     }
 
-    private async Task PreviewAsync(RecoveryCandidate candidate)
+    private async Task PreviewAsync(RecoveryCandidate candidate, RecoveryReport? candidateSource = null)
     {
-        var sourceReport = report;
+        var sourceReport = candidateSource ?? report;
         if (sourceReport is null) return;
         var generation = ++previewGeneration;
         previewCancellation?.Cancel();
@@ -342,8 +371,8 @@ public partial class MainWindow : Window
         PreviewPlaceholder.Visibility = Visibility.Visible;
         PreviewTitle.Text = CandidateRow.NameFor(candidate);
         PreviewStatus.Text = CandidateRow.LabelFor(candidate.State) + ". " + (candidate.DeletionStatus == "unknown" ? "Löschstatus unbekannt." : "Löschstatus: " + candidate.DeletionStatus);
-        CandidateDetails.Text = $"Format  {candidate.Kind.ToUpperInvariant()}\nGröße   {FormatBytes(candidate.Length)}\n" + (candidate.StoredPath is null ? $"Quelloffset  {candidate.Offset:N0}\nQuelle  {report?.Source.Path}" : $"Rekonstruktion\n{candidate.StoredPath}\nQuelloffset  nicht verifiziert") + $"\nZuordnung  {candidate.Mapping}\n\n{candidate.Validation}\n\nSHA-256\n{candidate.Sha256}" + (candidate.Diagnostics.Count > 0 ? "\n\n" + string.Join("\n", candidate.Diagnostics) : "");
-        if (!caseCanRecover)
+        CandidateDetails.Text = $"Format  {candidate.Kind.ToUpperInvariant()}\nGröße   {FormatBytes(candidate.Length)}\n" + (candidate.StoredPath is null ? $"Quelloffset  {candidate.Offset:N0}\nQuelle  {sourceReport.Source.Path}" : $"Rekonstruktion\n{candidate.StoredPath}\nQuelloffset  nicht verifiziert") + $"\nZuordnung  {candidate.Mapping}\n\n{candidate.Validation}\n\nSHA-256\n{candidate.Sha256}" + (candidate.Diagnostics.Count > 0 ? "\n\n" + string.Join("\n", candidate.Diagnostics) : "");
+        if (!caseCanRecover && candidateSource is null)
         {
             PreviewPlaceholder.Text = "Die gespeicherte Quelle ist nicht verfügbar oder hat sich verändert. Die Fundliste bleibt lesbar; öffne eine passende, unveränderte Quelle erneut.";
             return;
@@ -402,6 +431,7 @@ public partial class MainWindow : Window
 
     private async void Export_Click(object sender, RoutedEventArgs e) => await GuardAsync(async () =>
     {
+        if (SourceMode.SelectedIndex == 3) { await ExportFolderSelectionAsync(); return; }
         if (report is null) return;
         var selected = CandidatesGrid.SelectedItems.Cast<CandidateRow>().Select(r => r.Candidate.Id).ToArray();
         if (selected.Length == 0) return;
@@ -417,7 +447,7 @@ public partial class MainWindow : Window
         ProgressDetail.Text = exported.Diagnostics.Count > 0 ? string.Join(" · ", exported.Diagnostics.Take(2)) : exported.Destination;
     });
 
-    private async void SaveReport_Click(object sender, RoutedEventArgs e) => await GuardAsync(SaveCaseAsAsync);
+    private async void SaveReport_Click(object sender, RoutedEventArgs e) => await GuardAsync(() => SourceMode.SelectedIndex == 3 ? SaveFolderReportAsync() : SaveCaseAsAsync());
 
     private void OpenOutput_Click(object sender, RoutedEventArgs e)
     {
@@ -436,21 +466,25 @@ public partial class MainWindow : Window
         SourceMode.IsEnabled = !busy;
         ImagePanel.IsEnabled = !busy;
         DrivePanel.IsEnabled = !busy;
+        FolderSourcePanel.IsEnabled = !busy;
         EngineBox.IsEnabled = !busy;
         DeepScopeBox.IsEnabled = !busy;
         ProfileExpander.IsEnabled = !busy;
         FragmentsCheck.IsEnabled = !busy;
-        ScanButton.IsEnabled = !busy && SourceMode.SelectedIndex == 0;
+        ScanButton.IsEnabled = !busy && SourceMode.SelectedIndex != 1;
         CancelButton.IsEnabled = busy && activeCancellation?.IsCancellationRequested == false;
         CaptureButton.IsEnabled = !busy;
         var count = CandidatesGrid.SelectedItems.Count;
         SelectionSummary.Text = count == 0 ? "Noch keine Funde ausgewählt" : $"{count:N0} Funde ausgewählt · {FormatBytes(CandidatesGrid.SelectedItems.Cast<CandidateRow>().Sum(r => r.Candidate.Length))}";
-        ExportButton.IsEnabled = !busy && caseCanRecover && report is not null && count > 0;
-        ReportButton.IsEnabled = !busy && report is not null;
-        SaveLibraryButton.IsEnabled = !busy && report is not null;
-        ClearCaseButton.IsEnabled = !busy && report is not null;
+        var folder = SourceMode.SelectedIndex == 3;
+        ExportButton.IsEnabled = !busy && count > 0 && (folder ? folderReport is not null : caseCanRecover && report is not null);
+        ReportButton.IsEnabled = !busy && (folder ? folderReport is not null : report is not null);
+        ReportButton.ToolTip = folder ? "Ordnersuchbericht für TraceLedger sichern; keine in der Bildbibliothek wieder zu öffnende Untersuchung" : "Als später wieder zu öffnende Untersuchung sichern";
+        SaveLibraryButton.IsEnabled = !busy && !folder && report is not null;
+        ClearCaseButton.IsEnabled = !busy && (folder ? folderReport is not null : report is not null);
         OpenCaseButton.IsEnabled = !busy;
         LibraryButton.IsEnabled = !busy;
+        UpdateRecycleControls();
     }
 
     private async Task GuardAsync(Func<Task> action)
@@ -506,6 +540,11 @@ public partial class MainWindow : Window
         "verifying_saved_output" => "Gespeicherte Funddateien werden per SHA-256 geprüft",
         "investigation_loaded" => "Gespeicherte Untersuchung geladen",
         "investigation_saved" => "Untersuchung gesichert",
+        "saving_investigation" => "Untersuchung wird gesichert",
+        "recycle_scan" or "scanning_recycle" => "Windows-Papierkorb wird gelesen",
+        "recycle_restore" or "restoring_recycle" => "Papierkorb-Datei wird als geprüfte Kopie gesichert",
+        "recycle_copying" => "Papierkorb-Datei wird als neue Kopie gesichert",
+        "folder_scanning" => "Vorhandene Dateien werden nach Bilddaten durchsucht",
         "export" or "exporting" or "recovering" => "Kopien werden gesichert",
         "capture" or "capturing" => "Abbild wird gesichert",
         "verify_capture" => "Gesichertes Abbild wird erneut geprüft",
@@ -656,10 +695,12 @@ public partial class MainWindow : Window
     }
 
     private sealed record VolumeRow(string Id, string Label);
-    private sealed class CandidateRow(RecoveryCandidate candidate)
+    private sealed class CandidateRow(RecoveryCandidate candidate, RecoveryReport? sourceReport = null, string? hitId = null)
     {
         public RecoveryCandidate Candidate { get; } = candidate;
-        public string DisplayName => NameFor(Candidate);
+        public RecoveryReport? SourceReport { get; } = sourceReport;
+        public string HitId { get; } = hitId ?? candidate.Id;
+        public string DisplayName => NameFor(Candidate) + (SourceReport is null ? "" : " · " + Path.GetFileName(SourceReport.Source.Path));
         public string StateLabel => LabelFor(Candidate.State);
         public string SizeLabel => FormatBytes(Candidate.Length);
         public int StateGroup => GroupFor(Candidate.State);

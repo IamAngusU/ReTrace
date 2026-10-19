@@ -82,3 +82,33 @@ On one mostly empty 128-MiB synthetic image, three warm scans changed from
 256.96/256.94/258.43 ms to 178.58/175.28/173.69 ms with the same four candidates
 and source SHA-256. BF6 was not detected during this local comparison.
 This is a narrow warm-cache measurement, not a disk-speed or gaming benchmark.
+
+## Alpha.3: real Windows Recycle Bin and folder sources
+
+Two newly created, owned fixtures (a genuine PNG and a text file) were sent into
+the real Windows Recycle Bin with the Windows Shell recycle operation. The
+native core found their exact original paths and restored new copies. Both
+output SHA-256 values matched the recorded originals, while the original
+paths remained absent and the exact Recycle Bin metadata/payloads remained
+present and unchanged. Existing personal entries were not restored or removed.
+The bin was not emptied. This validates ordinary bin recovery, not recovery of
+discarded sectors after permanent deletion.
+
+Actual native dark/light UI runs selected only the owned PNG entry and repeated
+the verified copy operation. Separate owned hidden-cache, hidden-backup and
+temporary-file fixtures produced four image candidates across three containers.
+Multiple selected whole and partial candidates were exported byte-exactly;
+source hashes were unchanged. The original image workflow was rechecked too.
+
+Folder search examines allocated file bytes within the chosen root; it cannot
+read unallocated disk sectors. Thumbnail/cache candidates are potential derived
+copies, never asserted to be full original files. A live physical-volume scan,
+permanent deletion from a real host bin, VSS acquisition and arbitrary fragmented
+real-device recovery have not been newly certified by these tests.
+
+The bounded native folder profile was also exercised on the current user's
+actual Windows Explorer cache folder. It read 22 accessible ordinary files
+(6,308,242 bytes) and found 38 structurally complete JPEG/PNG candidates across
+three containers. No image contents were exported or rendered. Locked entries
+and the deliberately zero-depth profile produced an explicit partial report.
+These can be derived icon/thumbnail images, not recovered original photographs.

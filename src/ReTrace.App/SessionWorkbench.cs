@@ -39,6 +39,7 @@ public partial class MainWindow
     private void ClearCase_Click(object sender, RoutedEventArgs e)
     {
         if (busy) return;
+        if (SourceMode.SelectedIndex == 3) { ClearFolderView(); return; }
         ClearCurrentInvestigation();
         StatusLabel.Text = "Untersuchung geschlossen. Quelldaten und gesicherte Dateien bleiben erhalten.";
         ProgressDetail.Text = "Du kannst eine gespeicherte Untersuchung öffnen oder eine neue Suche starten.";
