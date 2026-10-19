@@ -1,0 +1,32 @@
+name: ReTrace Windows
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  build-and-test:
+    if: github.repository == 'angusu-de/ReTrace'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Test recovery, source guards, output verification and cancellation
+        run: dotnet run --project tests/ReTrace.Tests/ReTrace.Tests.csproj -c Release
+      - name: Build native application
+        run: dotnet build src/ReTrace.App/ReTrace.App.csproj -c Release --nologo
+      - name: Exercise actual native scan, preview and export
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP 'retrace-synthetic.img'
+          dotnet run --project tests/ReTrace.Tests/ReTrace.Tests.csproj -c Release -- --write-fixture $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Fixture creation failed.' }
+          $proof = Join-Path $env:RUNNER_TEMP 'retrace-native-proof.json'
+          $image = Join-Path $env:RUNNER_TEMP 'retrace-native-preview.png'
+          $executable = Join-Path $PWD 'src/ReTrace.App/bin/Release/net10.0-windows/ReTrace.exe'
+          $arguments = @('--source', ('"' + $fixture + '"'), '--verify-workbench', ('"' + $proof + '"'), '--render-preview', ('"' + $image + '"'))
+          $process = Start-Process -FilePath $executable -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $proof)) { throw 'Native workflow failed.' }

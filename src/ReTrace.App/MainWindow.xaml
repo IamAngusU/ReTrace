@@ -1,0 +1,83 @@
+<Window x:Class="ReTrace.App.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ReTrace — Dateien und Bilder zurückholen" Width="1380" Height="920" MinWidth="1120" MinHeight="760" Style="{StaticResource {x:Type Window}}" WindowStartupLocation="CenterScreen" Closing="Window_Closing">
+  <Grid Margin="28,22,28,18">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <Grid Margin="0,0,0,24">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <StackPanel Orientation="Horizontal">
+        <Border Width="45" Height="45" CornerRadius="12" Background="{DynamicResource Accent}" Margin="0,0,13,0">
+          <Viewbox Width="27" Height="27"><Canvas Width="32" Height="32"><Path Stroke="#241A12" StrokeThickness="2.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Data="M8,11 C11,3 25,4 27,14 C30,25 17,31 10,24 M8,4 L7,12 L15,12"/><Path Stroke="#241A12" StrokeThickness="2.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Data="M14,18 L18,22 L24,15"/></Canvas></Viewbox>
+        </Border>
+        <StackPanel><TextBlock Text="ReTrace" FontSize="26" FontWeight="SemiBold" LineHeight="30"/><TextBlock Text="Eine zweite Chance für deine Dateien." Foreground="{DynamicResource Muted}" FontSize="12"/></StackPanel>
+      </StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="0.1 · Vorschauversion" Foreground="{DynamicResource Muted}" Margin="0,0,18,0" VerticalAlignment="Center"/><Button x:Name="ThemeButton" Content="Heller Modus" Click="Theme_Click"/></StackPanel>
+    </Grid>
+
+    <Border Grid.Row="1" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1" Padding="0,0,0,18" Margin="0,0,0,22">
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+        <StackPanel Orientation="Horizontal"><Border Background="{DynamicResource Accent}" CornerRadius="14" Width="28" Height="28"><TextBlock Text="1" Foreground="{DynamicResource AccentInk}" HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="SemiBold"/></Border><StackPanel Margin="10,0,0,0"><TextBlock Text="Quelle wählen" FontWeight="SemiBold"/><TextBlock Text="Abbild statt Original verändern" Style="{StaticResource MutedText}"/></StackPanel></StackPanel>
+        <StackPanel Grid.Column="1" Orientation="Horizontal"><Border Background="{DynamicResource Raised}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="14" Width="28" Height="28"><TextBlock Text="2" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel Margin="10,0,0,0"><TextBlock Text="Funde prüfen" FontWeight="SemiBold"/><TextBlock Text="Vollständige und teilweise Bilder" Style="{StaticResource MutedText}"/></StackPanel></StackPanel>
+        <StackPanel Grid.Column="2" Orientation="Horizontal"><Border Background="{DynamicResource Raised}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="14" Width="28" Height="28"><TextBlock Text="3" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel Margin="10,0,0,0"><TextBlock Text="Kopien sichern" FontWeight="SemiBold"/><TextBlock Text="In einen neuen Rettungsordner" Style="{StaticResource MutedText}"/></StackPanel></StackPanel>
+      </Grid>
+    </Border>
+
+    <Grid Grid.Row="2"><Grid.ColumnDefinitions><ColumnDefinition Width="285"/><ColumnDefinition Width="22"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+      <Border Style="{StaticResource Panel}" Padding="18">
+        <Grid><Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel>
+          <TextBlock Text="Wo fehlen deine Dateien?" FontSize="19" FontWeight="SemiBold" TextWrapping="Wrap"/>
+          <TextBlock Text="Auch nach dem Leeren des Papierkorbs können noch Datei- und Bilddaten auf dem Datenträger liegen." Style="{StaticResource MutedText}" Margin="0,10,0,16"/>
+          <TextBlock Text="Quelle" Style="{StaticResource Label}"/>
+          <ComboBox x:Name="SourceMode" SelectionChanged="SourceMode_Changed"><ComboBoxItem Content="Vorhandenes Datenträgerabbild"/><ComboBoxItem Content="Laufwerk als Abbild sichern"/></ComboBox>
+          <StackPanel x:Name="ImagePanel" Margin="0,10,0,0">
+            <TextBox x:Name="SourceBox" Style="{StaticResource MonoBox}" TextWrapping="Wrap" MinHeight="66" MaxHeight="90" VerticalScrollBarVisibility="Auto" ToolTip="Absoluter Pfad zu einer regulären Abbilddatei"/>
+            <Button Content="Abbild auswählen…" Click="PickSource_Click" Margin="0,8,0,0" HorizontalAlignment="Stretch"/>
+          </StackPanel>
+          <StackPanel x:Name="DrivePanel" Visibility="Collapsed" Margin="0,12,0,0">
+            <ComboBox x:Name="VolumesBox" DisplayMemberPath="Label"/>
+            <Button Content="Laufwerke aktualisieren" Click="RefreshVolumes_Click" Margin="0,8,0,0"/>
+            <TextBlock Text="Das Laufwerk wird nur gelesen. Sichere das Abbild auf einem anderen physischen Datenträger. Auf aktiv genutzten Laufwerken können sich Daten währenddessen ändern." Style="{StaticResource MutedText}" Margin="0,12,0,8"/>
+            <Button x:Name="CaptureButton" Content="Abbild sichern…" Click="Capture_Click"/>
+            <Button x:Name="ElevateButton" Content="Als Administrator neu öffnen…" Click="Elevate_Click" Margin="0,8,0,0"/>
+            <TextBlock Text="Administratorrechte werden nur für das Lesen eines Laufwerks benötigt. Ein bestehendes Abbild lässt sich ohne sie untersuchen." Style="{StaticResource MutedText}" FontSize="11" Margin="0,8,0,0"/>
+          </StackPanel>
+          <TextBlock Text="Suchmodus" Style="{StaticResource Label}"/>
+          <ComboBox x:Name="EngineBox" SelectionChanged="Engine_Changed"><ComboBoxItem Content="Bildsuche · integriert"/><ComboBoxItem Content="Tiefensuche · PhotoRec"/></ComboBox>
+          <TextBlock x:Name="EngineDescription" Style="{StaticResource MutedText}" Margin="0,9,0,0"/>
+          <StackPanel x:Name="DeepScopePanel" Visibility="Collapsed"><TextBlock Text="Dateitypen für PhotoRec" Style="{StaticResource Label}"/><ComboBox x:Name="DeepScopeBox"><ComboBoxItem Content="Fotos · JPEG und PNG"/><ComboBoxItem Content="Alle PhotoRec-Dateitypen"/></ComboBox></StackPanel>
+          <CheckBox x:Name="FragmentsCheck" IsChecked="True" Content="Auch Bildfragmente behalten" Margin="0,16,0,0"/>
+          <Border BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Margin="0,22,0,0" Padding="0,16,0,0"><TextBlock Text="Jetzt möglichst wenig auf das betroffene Laufwerk schreiben. Überschriebene oder durch SSD-TRIM entfernte Daten lassen sich möglicherweise nicht zurückholen." Style="{StaticResource MutedText}"/></Border>
+        </StackPanel></ScrollViewer><StackPanel Grid.Row="1" Margin="0,14,0,0"><Button x:Name="ScanButton" Content="Bilder suchen" Style="{StaticResource Primary}" Click="Scan_Click"/><Button x:Name="CancelButton" Content="Vorgang abbrechen" Click="Cancel_Click" IsEnabled="False" Margin="0,8,0,0"/></StackPanel></Grid>
+      </Border>
+
+      <Grid Grid.Column="2"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <Grid Margin="0,0,0,14"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+          <StackPanel><TextBlock x:Name="ResultsTitle" Text="Deine Funde" FontSize="23" FontWeight="SemiBold"/><TextBlock x:Name="ResultsSummary" Text="Wähle ein Abbild und starte die Suche." Style="{StaticResource MutedText}" Margin="0,4,0,0"/></StackPanel>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><ComboBox x:Name="KindFilter" Width="125" Margin="0,0,8,0" SelectionChanged="Filter_Changed"/><ComboBox x:Name="StateFilter" Width="160" SelectionChanged="Filter_Changed"/></StackPanel>
+        </Grid>
+        <Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="300"/></Grid.ColumnDefinitions>
+          <Border Style="{StaticResource Panel}" Padding="0"><Grid>
+            <DataGrid x:Name="CandidatesGrid" SelectionMode="Extended" SelectionChanged="Selection_Changed" MouseDoubleClick="Candidate_DoubleClick" CanUserSortColumns="True">
+              <DataGrid.Columns><DataGridTextColumn Header="Bild / Datei" Binding="{Binding DisplayName}" Width="*" MinWidth="115"/><DataGridTextColumn Header="Zustand" Binding="{Binding StateLabel}" Width="148"/><DataGridTextColumn Header="Größe" Binding="{Binding SizeLabel}" Width="84"/></DataGrid.Columns>
+            </DataGrid>
+            <StackPanel x:Name="EmptyPanel" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24"><TextBlock Text="Was noch da ist, zählt." FontSize="21" FontWeight="SemiBold" TextAlignment="Center" TextWrapping="Wrap"/><TextBlock Text="Hier erscheinen die gefundenen Bilder.&#10;Du entscheidest, was du sicherst." Style="{StaticResource MutedText}" TextAlignment="Center" Margin="0,10,0,0"/></StackPanel>
+          </Grid></Border>
+          <Border Grid.Column="2" Style="{StaticResource Panel}" Padding="15"><Grid><Grid.RowDefinitions><RowDefinition Height="220"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <Border Background="{DynamicResource Input}" CornerRadius="5"><Grid><Image x:Name="PreviewImage" Stretch="Uniform" Margin="8"/><TextBlock x:Name="PreviewPlaceholder" Text="Bild für die Vorschau auswählen" Foreground="{DynamicResource Muted}" TextAlignment="Center" TextWrapping="Wrap" Margin="22" VerticalAlignment="Center"/></Grid></Border>
+            <StackPanel Grid.Row="1" Margin="0,14,0,0"><TextBlock x:Name="PreviewTitle" Text="Vorschau" FontSize="17" FontWeight="SemiBold" TextWrapping="Wrap"/><TextBlock x:Name="PreviewStatus" Text="Eine Vorschau zeigt, was sich bereits lesen lässt." Style="{StaticResource MutedText}" Margin="0,6,0,0"/></StackPanel>
+            <ScrollViewer Grid.Row="2" Margin="0,14,0,0" VerticalScrollBarVisibility="Auto"><TextBlock x:Name="CandidateDetails" Foreground="{DynamicResource Muted}" TextWrapping="Wrap" FontSize="11" LineHeight="18" FontFamily="Cascadia Mono, Consolas"/></ScrollViewer>
+          </Grid></Border>
+        </Grid>
+        <Border Grid.Row="2" BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Padding="0,16,0,0" Margin="0,17,0,0"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+          <StackPanel><TextBlock x:Name="SelectionSummary" Text="Noch keine Bilder ausgewählt" FontWeight="SemiBold"/><TextBlock Text="Signaturfunde können auch vorhandene Bilder sein. Der Löschstatus ist dabei unbekannt." Style="{StaticResource MutedText}" FontSize="11" MaxWidth="440" Margin="0,5,12,0"/></StackPanel>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top"><Button x:Name="ReportButton" Content="Bericht…" Click="SaveReport_Click" IsEnabled="False" Margin="0,0,8,0"/><Button x:Name="ExportButton" Content="Auswahl sichern…" Style="{StaticResource Primary}" Click="Export_Click" IsEnabled="False"/></StackPanel>
+        </Grid></Border>
+      </Grid>
+    </Grid>
+
+    <Border Grid.Row="3" Margin="0,18,0,0" Background="{DynamicResource Surface}" CornerRadius="7" Padding="14,11"><Grid><Grid.RowDefinitions><RowDefinition/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <StackPanel><TextBlock x:Name="StatusLabel" Text="Bereit. Die Quelle wird nur gelesen." FontWeight="SemiBold" TextWrapping="Wrap"/><TextBlock x:Name="ProgressDetail" Text="Integriert: JPEG und PNG · weitere Dateitypen über PhotoRec" Style="{StaticResource MutedText}" FontSize="11" Margin="0,3,0,0"/></StackPanel>
+      <Button x:Name="OpenOutputButton" Grid.Column="1" Content="Rettungsordner öffnen" Visibility="Collapsed" Click="OpenOutput_Click" Margin="16,0,0,0"/>
+      <ProgressBar x:Name="WorkProgress" Grid.Row="1" Grid.ColumnSpan="2" Height="3" Margin="0,10,0,0" Maximum="100" Value="0"/>
+    </Grid></Border>
+  </Grid>
+</Window>
