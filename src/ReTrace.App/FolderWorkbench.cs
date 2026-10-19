@@ -25,7 +25,8 @@ public partial class MainWindow
         MaximumFileBytes = ReadProfileNumber(MaximumFileMiBBox.Text, "Maximale Fundgröße in MiB", 1, 1024) * 1024L * 1024,
         IncludeFragments = FragmentsCheck.IsChecked == true,
         MaximumDepth = 8,
-        MaximumEntries = 10000
+        MaximumEntries = 10000,
+        Types = ReadMediaTypes()
     };
 
     private async Task ScanFolderAsync()
@@ -35,21 +36,21 @@ public partial class MainWindow
         if (!Path.IsPathFullyQualified(source) || !Directory.Exists(source)) throw new InvalidDataException("Wähle zuerst einen vorhandenen Ordner mit absolutem Pfad.");
         var options = ReadFolderOptions();
         ClearFolderView();
-        ResultsSummary.Text = "Vorhandene Dateien und eingebettete Bilddaten werden innerhalb des Suchprofils gelesen.";
-        await RunJobAsync("Ordner wird nach vorhandenen Bilddaten durchsucht…", async (progress, token) => folderReport = await FolderRecovery.ScanAsync(source, options, progress, token));
+        ResultsSummary.Text = "Vorhandene Dateien und eingebettete Foto-/Videodaten werden innerhalb des Suchprofils gelesen.";
+        await RunJobAsync("Ordner wird nach vorhandenen Foto-/Videodaten durchsucht…", async (progress, token) => folderReport = await FolderRecovery.ScanAsync(source, options, progress, token));
         if (folderReport is null) return;
         KindFilter.ItemsSource = new[] { "Alle Formate" }.Concat(folderReport.Containers.SelectMany(c => c.Recovery.Candidates).Select(c => c.Kind.ToUpperInvariant()).Distinct().Order());
         KindFilter.SelectedIndex = 0;
         StateFilter.SelectedIndex = 0;
         ApplyFolderView();
-        StatusLabel.Text = "Ordnersuche: " + ReportStatusLabel(folderReport.Status) + ". Wähle vorhandene Bilddaten zum Sichern aus.";
+        StatusLabel.Text = "Ordnersuche: " + ReportStatusLabel(folderReport.Status) + ". Wähle vorhandene Mediendaten zum Sichern aus.";
         ProgressDetail.Text = folderReport.Diagnostics.Count > 0 ? string.Join(" · ", folderReport.Diagnostics.Take(2)) : "Begrenztes Suchprofil · Löschstatus und frühere Originalvollständigkeit bleiben unbekannt.";
     }
 
     private void ApplyFolderView()
     {
         var count = folderReport?.Containers.Sum(c => c.Recovery.Candidates.Count) ?? 0;
-        ResultsTitle.Text = folderReport is null ? "Bilddaten in Ordnern" : $"{count:N0} Bildfunde aus Dateien";
+        ResultsTitle.Text = folderReport is null ? "Mediendaten in Ordnern" : $"{count:N0} Medienfunde aus Dateien";
         ResultsSummary.Text = folderReport is null ? "Wähle einen Ordner. Versteckte reguläre Dateien werden ebenfalls berücksichtigt." : $"{folderReport.ScannedFiles:N0} Dateien · {FormatBytes(folderReport.ScannedBytes)} gelesen · {ReportStatusLabel(folderReport.Status)} · keine vollständige Originalrekonstruktion";
         RefreshFolderCandidates();
         UpdateControls();
@@ -71,7 +72,7 @@ public partial class MainWindow
             }
         }
         EmptyPanel.Visibility = visible.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
-        EmptyPanel.Children.OfType<System.Windows.Controls.TextBlock>().First().Text = folderReport is null ? "Noch kein Ordner durchsucht." : "In diesem Profil keine passenden Bildfunde.";
+        EmptyPanel.Children.OfType<System.Windows.Controls.TextBlock>().First().Text = folderReport is null ? "Noch kein Ordner durchsucht." : "In diesem Profil keine passenden Medienfunde.";
         UpdateControls();
     }
 
@@ -107,7 +108,7 @@ public partial class MainWindow
     {
         var current = folderReport ?? throw new InvalidOperationException("Lies zuerst den ausgewählten Ordner.");
         ExportReport? result = null;
-        await RunJobAsync("Ausgewählte Bilddaten werden als geprüfte Kopien gesichert…", async (progress, token) => result = await FolderRecovery.RestoreAsync(current, ids, destination, progress, token));
+        await RunJobAsync("Ausgewählte Mediendaten werden als geprüfte Kopien gesichert…", async (progress, token) => result = await FolderRecovery.RestoreAsync(current, ids, destination, progress, token));
         if (result is null) return null;
         outputDirectory = result.Destination;
         OpenOutputButton.Visibility = Directory.Exists(outputDirectory) ? Visibility.Visible : Visibility.Collapsed;

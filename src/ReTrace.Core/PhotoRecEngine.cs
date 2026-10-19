@@ -18,12 +18,12 @@ public sealed record PhotoRecOptions
     public string? BundleArchivePath { get; init; }
 }
 
-/// <summary>Image-only PhotoRec worker. It never mounts or opens a live device.</summary>
+/// <summary>Offline-image PhotoRec worker. It never mounts or opens a live device.</summary>
 public static class PhotoRecEngine
 {
     private const long MaximumSourceBytes = RecoveryLimits.MaximumSourceBytes;
     private static readonly HashSet<string> AllowedTypes = new(StringComparer.Ordinal)
-        { "jpg", "png", "pdf", "zip", "wav" };
+        { "jpg", "png", "pdf", "zip", "wav", "mov", "mp4", "avi", "mkv", "webm", "asf", "wmv", "mpg", "mov/mdat" };
 
     public static async Task<RecoveryReport> RunAsync(string source, string workDirectory,
         PhotoRecOptions? options = null, IProgress<RecoveryProgress>? progress = null,
@@ -147,6 +147,8 @@ public static class PhotoRecEngine
                 "Partial or damaged outputs may contain only a fragment; no missing pixels or bytes are invented.",
                 "Output budgets are polled every 100 ms; an external worker may exceed a budget before it can be stopped.",
                 "Independent image checks validate structure, not the identity or exact original completeness of a file.",
+                "PhotoRec selectors enable upstream file families: mov also covers MP4/3GP and some non-video containers; riff also covers WAV. Additional family outputs may remain unverified.",
+                "Video structure does not establish playability. Fragmented camera recordings, missing indexes/codecs or separate mdat atoms may need matching metadata; this worker does not automatically join or repair fragments.",
                 $"Profile: {string.Join(",", options.Types)}; output bytes {options.MaximumOutputBytes}; files {options.MaximumFiles}; bytes per file {options.MaximumFileBytes}; timeout seconds {options.TimeoutSeconds}."
             ]
         };
@@ -177,7 +179,7 @@ public static class PhotoRecEngine
             options.MaximumFiles is < 1 or > 100000 ||
             options.MaximumFileBytes is <= 0 or > 1024L * 1024 * 1024 ||
             options.TimeoutSeconds is < 1 or > 7 * 24 * 3600 ||
-            options.Types is null || options.Types.Length is < 1 or > 5 ||
+            options.Types is null || options.Types.Length < 1 || options.Types.Length > AllowedTypes.Count ||
             (!(options.Types.Length == 1 && options.Types[0] == "all") &&
                 options.Types.Any(x => x is null || !AllowedTypes.Contains(x))) ||
             options.Types.Distinct(StringComparer.Ordinal).Count() != options.Types.Length)
@@ -192,9 +194,15 @@ public static class PhotoRecEngine
         var command = new List<string> { "partition_none", "options",
             options.IncludeBroken ? "keep_corrupted_file" : "keep_corrupted_file_no",
             "paranoid", "fileopt", "everything", all ? "enable" : "disable" };
+        // These family names are verified against the pinned TestDisk 7.2 source archive:
+        // file_mov.c, file_riff.c, file_mkv.c, file_asf.c and file_mpg.c.
+        // Public aliases describe the requested media; upstream families also recover siblings.
+        var enabledFamilies = new HashSet<string>(StringComparer.Ordinal);
         foreach (var type in all ? [] : options.Types)
         {
-            command.Add(type == "wav" ? "riff" : type);
+            string family = type switch { "mp4" => "mov", "avi" or "wav" => "riff", "webm" => "mkv", "wmv" => "asf", _ => type };
+            if (!enabledFamilies.Add(family)) continue;
+            command.Add(family);
             command.Add("enable");
         }
         command.AddRange(["wholespace", "search"]);
@@ -247,7 +255,12 @@ public static class PhotoRecEngine
         PhotoRecPaths.RequireRegularFile(file.Path);
         using var stream = PathSafety.OpenRead(file.Path);
         var hash = await PhotoRecPaths.HashAsync(stream, cancellationToken);
-        var assessment = kind is "jpg" or "png" ? PhotoCarver.AssessFile(file.Path, kind, maximumFileBytes) : null;
+        var assessment = kind switch
+        {
+            "jpg" or "png" => PhotoCarver.AssessFile(file.Path, kind, maximumFileBytes),
+            "mp4" or "mov" or "avi" => VideoCarver.AssessFile(file.Path, kind, maximumFileBytes),
+            _ => null
+        };
         var name = Path.GetFileName(file.Path);
         var state = assessment?.State ?? "unverified_carved_candidate";
         var notes = assessment?.Diagnostics.ToList() ?? [];
@@ -261,6 +274,11 @@ public static class PhotoRecEngine
             notes.Add("PhotoRec classified this output as an embedded JPEG thumbnail, not the full original photo.");
             if (state == "complete") state = "thumbnail";
         }
+        if (kind is "mov" or "mp4" && name.Contains("_mdat", StringComparison.OrdinalIgnoreCase))
+        {
+            state = "fragment";
+            notes.Add("PhotoRec recovered a separate mdat video atom. A matching video header/index is not established; these bytes are not claimed to be a playable recording.");
+        }
         if (assessment is not null && assessment.Length != file.Length)
         {
             notes.Add("Recovered output includes bytes outside the assessed image span.");
@@ -268,7 +286,7 @@ public static class PhotoRecEngine
         }
         return new RecoveryCandidate
         {
-            Id = $"photorec-{number:000000}", Kind = kind, Offset = -1, Length = file.Length,
+            Id = $"photorec-{number:000000}", Kind = kind is "mp4" or "mov" or "avi" && assessment is not null ? assessment.Kind : kind, Offset = -1, Length = file.Length,
             Sha256 = hash, State = state, StoredPath = file.Path, Name = name,
             Mapping = "external_reconstruction", DeletionStatus = "unknown",
             Validation = assessment?.Validation ?? "PhotoRec output; independent format validation unavailable.",

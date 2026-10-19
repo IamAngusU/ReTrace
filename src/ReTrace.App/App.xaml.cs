@@ -10,7 +10,7 @@ public partial class App : Application
         base.OnStartup(e);
         if (e.Args.Contains("--self-test", StringComparer.Ordinal))
         {
-            Console.WriteLine("ReTrace desktop · native WPF · 0.1.0-alpha.3");
+            Console.WriteLine("ReTrace desktop · native WPF · 0.1.0-alpha.4");
             Shutdown(0);
             return;
         }

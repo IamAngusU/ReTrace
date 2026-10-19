@@ -15,13 +15,14 @@ public sealed record FolderRecoveryOptions
     public long MaximumFileBytes { get; init; } = 64L * 1024 * 1024;
     public long MaximumFragmentBytes { get; init; } = 4L * 1024 * 1024;
     public bool IncludeFragments { get; init; } = true;
+    public string[] Types { get; init; } = ["jpeg", "png"];
 }
 
 public sealed record FolderRecoveryContainer(string Id, RecoveryReport Recovery);
 public sealed record FolderRecoveryReport
 {
     public string Schema { get; init; } = "retrace.folder-search.v1";
-    public string Version { get; init; } = "0.1.0-alpha.3";
+    public string Version { get; init; } = "0.1.0-alpha.4";
     public required string RootPath { get; init; }
     public string Status { get; init; } = "complete_within_profile";
     public int VisitedEntries { get; init; }
@@ -48,6 +49,7 @@ public static class FolderRecovery
     private static FolderRecoveryReport Scan(string folder, FolderRecoveryOptions options, IProgress<RecoveryProgress>? progress, CancellationToken token)
     {
         ValidateOptions(options);
+        options = options with { Types = MediaCarver.NormalizeTypes(options.Types).Order(StringComparer.Ordinal).ToArray() };
         string root = PathSafety.CheckPath(folder);
         if (!Directory.Exists(root)) throw new IOException("Choose an existing ordinary local folder.");
         var pending = new Stack<(string Path, int Depth)>();
@@ -107,14 +109,14 @@ public static class FolderRecovery
                 try
                 {
                     long before = scanned;
-                    RecoveryReport report = PhotoCarver.ScanAsync(path, new()
+                    RecoveryReport report = MediaCarver.ScanAsync(path, new()
                     {
                         MaximumCandidates = options.MaximumCandidates - candidates,
                         MaximumSourceBytes = Math.Min(options.MaximumContainerBytes, options.MaximumSourceBytes - scanned),
                         MaximumFileBytes = options.MaximumFileBytes, MaximumFragmentBytes = options.MaximumFragmentBytes,
                         IncludeFragments = options.IncludeFragments
-                    }, new InlineProgress(p => progress?.Report(new("folder_scanning", before + p.BytesDone,
-                        Math.Max(selectedBytes, before + p.BytesTotal), candidates + p.Candidates, "Inspecting file bytes; embedded images may be thumbnails or ordinary copies."))), token).GetAwaiter().GetResult();
+                    }, options.Types, new InlineProgress(p => progress?.Report(new("folder_scanning", before + p.BytesDone,
+                        Math.Max(selectedBytes, before + p.BytesTotal), candidates + p.Candidates, "Inspecting file bytes; embedded media may be previews or ordinary copies."))), token).GetAwaiter().GetResult();
                     scannedFiles++;
                     scanned += report.ScannedBytes;
                     candidates += report.Candidates.Count;
@@ -132,7 +134,7 @@ public static class FolderRecovery
         catch (OperationCanceledException) { status = "cancelled_partial"; }
         if (status == "complete_within_profile" && omitted) status = "partial_profile_limits";
         notes.Add("Only regular files in the explicitly selected folder were read. Hidden entries are included; alternate streams, archive extraction and snapshot acquisition are outside this profile.");
-        notes.Add("Image signatures do not prove deletion. Backup copies and embedded cache thumbnails can differ from the original file and resolution.");
+        notes.Add("Media signatures do not prove deletion. Backup copies and embedded cache previews can differ from the original file and resolution.");
         notes.Add("Free/unallocated disk space requires a disk-image/filesystem recovery profile; this folder scan cannot read sectors absent from ordinary files.");
         progress?.Report(new(status, scanned, scanned, candidates, "Folder profile finished; no source files were changed."));
         return new() { RootPath = root, Status = status, VisitedEntries = visited, ScannedFiles = scannedFiles,
@@ -151,7 +153,7 @@ public static class FolderRecovery
         foreach (var container in report.Containers)
         {
             if (container is null || container.Id.Length != 26 || !container.Id.StartsWith("container-", StringComparison.Ordinal) ||
-                !container.Id.AsSpan(10).ToArray().All(Uri.IsHexDigit) || container.Recovery.Engine != "native-photo-carver")
+                !container.Id.AsSpan(10).ToArray().All(Uri.IsHexDigit) || container.Recovery.Engine is not ("native-photo-carver" or "native-video-carver" or "native-media-carver"))
                 throw new IOException("Invalid folder container binding.");
             foreach (var candidate in container.Recovery.Candidates)
                 if (!known.TryAdd(container.Id + ":" + candidate.Id, (container, candidate))) throw new IOException("Duplicate folder candidate binding.");
@@ -225,6 +227,7 @@ public static class FolderRecovery
 
     private static void ValidateOptions(FolderRecoveryOptions options)
     {
+        MediaCarver.NormalizeTypes(options.Types ?? throw new ArgumentException("Folder formats are required.", nameof(options)));
         if (options.MaximumFiles is < 1 or > 10000 || options.MaximumEntries is < 1 or > 100000 || options.MaximumDepth is < 0 or > 32 ||
             options.MaximumSourceBytes < 1 || options.MaximumSourceBytes > 16L * 1024 * 1024 * 1024 ||
             options.MaximumContainerBytes < 1 || options.MaximumContainerBytes > 1024L * 1024 * 1024 ||

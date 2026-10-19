@@ -33,7 +33,7 @@ public partial class MainWindow
         MaximumOutputBytes = ReadProfileNumber(MaximumOutputGiBBox.Text, "PhotoRec-Ausgabe in GiB", 1, 1024) * 1024L * 1024 * 1024,
         TimeoutSeconds = ReadProfileNumber(TimeoutMinutesBox.Text, "PhotoRec-Laufzeit in Minuten", 1, 10080) * 60,
         IncludeBroken = FragmentsCheck.IsChecked == true,
-        Types = DeepScopeBox.SelectedIndex switch { 1 => ["all"], 2 => ["pdf", "zip"], _ => ["jpg", "png"] }
+        Types = ReadDeepMediaTypes()
     };
 
     private void ClearCase_Click(object sender, RoutedEventArgs e)

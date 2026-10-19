@@ -156,7 +156,7 @@ public static class InvestigationStore
         var investigation = await ReadAsync(path, cancellationToken);
         var report = investigation.Report;
         cancellationToken.ThrowIfCancellationRequested();
-        if (report.Engine == "native-photo-carver")
+            if (report.Engine is "native-photo-carver" or "native-video-carver" or "native-media-carver")
         {
             try
             {
@@ -352,7 +352,7 @@ public static class InvestigationStore
     private static void ValidateReport(RecoveryReport report)
     {
         if (report is null || report.Schema != "retrace.recovery.v1" || report.Source is null ||
-            report.Engine is not ("native-photo-carver" or "photorec-7.2-windows") || report.Exhaustive ||
+            report.Engine is not ("native-photo-carver" or "native-video-carver" or "native-media-carver" or "photorec-7.2-windows") || report.Exhaustive ||
             report.Source.Length < 0 || report.Source.Length > RecoveryLimits.MaximumSourceBytes ||
             report.Source.LastWriteUtcTicks < DateTime.MinValue.Ticks || report.Source.LastWriteUtcTicks > DateTime.MaxValue.Ticks ||
             report.ScannedBytes < 0 || report.ScannedBytes > report.Source.Length ||
@@ -364,7 +364,7 @@ public static class InvestigationStore
         string source = PathSafety.CheckPath(report.Source.Path, mustExist: false);
         if (!SamePath(source, report.Source.Path)) throw new IOException("The source path must be absolute and normalized.");
         Strings(report.Diagnostics, 256); Strings(report.Limitations, 128);
-        bool native = report.Engine == "native-photo-carver";
+        bool native = report.Engine != "photorec-7.2-windows";
         if (native && report.RunDirectory is not null || !native && string.IsNullOrWhiteSpace(report.RunDirectory))
             throw new IOException("The recovery engine and saved-run mapping disagree.");
         if (report.RunDirectory is not null)
@@ -388,6 +388,10 @@ public static class InvestigationStore
                 throw new IOException("Invalid or duplicate candidate IDs, format or byte lengths.");
             if (native)
             {
+                if (candidate.Kind is not ("jpeg" or "png" or "mp4" or "mov" or "avi") ||
+                    report.Engine == "native-photo-carver" && candidate.Kind is not ("jpeg" or "png") ||
+                    report.Engine == "native-video-carver" && candidate.Kind is not ("mp4" or "mov" or "avi"))
+                    throw new IOException("The native candidate format is outside its recorded engine profile.");
                 if (candidate.StoredPath is not null || candidate.Mapping != "contiguous_source_bytes" || candidate.Offset < 0 ||
                     candidate.Length > report.Source.Length || candidate.Offset > report.Source.Length - candidate.Length)
                     throw new IOException("A native candidate range is outside its recorded source image.");

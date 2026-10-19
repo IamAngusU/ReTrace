@@ -1,12 +1,12 @@
 # ReTrace
 
-Eigenständige Windows-App zum Wiederfinden und Sichern von Datei- und Bilddaten,
+Eigenständige Windows-App zum Wiederfinden und Sichern von Datei-, Bild- und Videodaten,
 auch nachdem Dateien aus dem Papierkorb entfernt wurden. Native C#/WPF-Oberfläche
 mit Dark-/Lightmode, lokalem Suchkern, mitgeliefertem PhotoRec, begrenzter
 Bildvorschau, Mehrfachauswahl und geprüfter Kopier-Rettung. Kein TraceLedger,
 Python, Konto, Internetdienst oder Kali-Start zur Benutzung erforderlich.
 
-**Aktuelle Vorschauversion: 0.1.0-alpha.3.** Eine gefundene Signatur ist noch keine
+**Aktuelle Vorschauversion: 0.1.0-alpha.4.** Eine gefundene Signatur ist noch keine
 nachgewiesen gelöschte oder vollständige Datei. ReTrace unterscheidet vollständige
 unterstützte Dateistrukturen, teilweise/beschädigte Bilder und ungeprüfte Funde.
 Lesbare Vorschauen sind ein zusätzlicher Decoder-Test, kein Beweis für das
@@ -19,13 +19,39 @@ vollständige ursprüngliche Bild. Fehlende Bytes werden nicht erfunden.
    vorhandenes Datenträgerabbild. Der Papierkorb ist die Standardansicht;
    erst ein ausdrücklicher Suchstart liest den gewählten Bestand.
 3. Die passende Suche starten. Ordner untersuchen reguläre Dateien einschließlich
-   versteckter Container. Bei Abbildern bietet **Bildsuche** native JPEG-/PNG-
-   Prüfung und **Tiefensuche** das gepinnte PhotoRec 7.2. Dessen Profile Fotos,
-   Dokumente oder alle Typen sind echte Suchoptionen; allgemeine Signaturfunde
+   versteckter Container. Die native Suche bietet **Fotos**, **Videos** und
+   **Alle Medien**. **Tiefensuche** verwendet das gepinnte PhotoRec 7.2. Dessen
+   Profile Fotos, Videos, Dokumente oder alle Typen sind echte Suchoptionen; allgemeine Signaturfunde
    können Fehlkandidaten sein und bleiben ungeprüft.
 4. Ganze oder teilweise lesbare Bilder ansehen, filtern und auswählen.
 5. **Auswahl sichern** erzeugt einen neuen Rettungsordner. Jede aufgeführte Kopie
    wird mit SHA-256 geprüft. Vorhandene Dateien oder Ordner werden nicht ersetzt.
+
+## Videos und gemischte Medien
+
+Die native Videosuche untersucht MP4, QuickTime MOV und AVI unabhängig von der
+Dateiendung. Sie prüft Containergrenzen, verschachtelte Video-Track-Header,
+Medienbereiche und unterstützte Chunk-Adressen. Fotos und Videos teilen in
+**Alle Medien** einen Quelldurchlauf. JPEG-Frames eines MJPEG-AVI können deshalb
+zusätzlich als einzelne Bilder erscheinen. Der reine Videofilter blendet diese
+aus. Ordner können auch Videos in versteckten Cache- oder .bak-Dateien finden.
+
+Das Video-Profil setzt tatsächlich 256 MiB pro Fund; die erweiterte Grenze ist
+1 GiB. Teilfragmente bleiben separat begrenzt. Größere Quelldateien erfordern ein
+passendes Container-/Gesamtprofil. Grenzen und ausgelassene Bereiche werden
+ausgewiesen. Die Videoansicht zeigt geprüfte Metadaten und Bytebereiche; sie
+startet keinen Player und führt keine Funddatei automatisch aus.
+
+Die PhotoRec-Videosuche aktiviert die tatsächlichen upstream-Formatfamilien
+MOV/MP4, RIFF/AVI, MKV/WebM, ASF/WMV und MPEG. Familien können auch Audio- oder
+andere verwandte Formate liefern. Eine gesonderte Option bewahrt `mov/mdat`-
+Fragmente auf. Sie verbindet diese nicht blind mit beliebigen Headern.
+Fragmentierte MP4s, fehlende Movie-Header und abgeschnittene Medien bleiben
+Teilfunde. Ein strukturell vollständiger Container ist noch kein Nachweis, dass
+alle Frames decodierbar oder die ursprünglichen Aufnahmen vollständig sind.
+
+Gespeicherte Video-Untersuchungen lassen sich wie Foto-Untersuchungen wieder
+öffnen, einzeln auswählen, sichern und als Metadaten an TraceLedger übergeben.
 
 **Laufwerk als Abbild sichern** liest ein ausgewähltes Laufwerk in eine neue
 Abbilddatei auf einem anderen erkannten Datenträger. Dafür kann ein ausdrücklicher

@@ -31,6 +31,7 @@ public partial class MainWindow : Window
     private string outputDirectory = "";
     private bool busy, ready, light, closingRequested, closingAllowed, verifyCancelAfterFirstChunk;
     private long previewGeneration;
+    private long jobGeneration;
 
     public MainWindow(string[] arguments)
     {
@@ -44,6 +45,7 @@ public partial class MainWindow : Window
         StateFilter.SelectedIndex = 0;
         SourceMode.SelectedIndex = ArgumentValue("--source") is not null || ArgumentValue("--case") is not null ? 0 : 2;
         EngineBox.SelectedIndex = 0;
+        MediaScopeBox.SelectedIndex = 0;
         DeepScopeBox.SelectedIndex = 0;
         ready = true;
         using (var identity = WindowsIdentity.GetCurrent()) ElevateButton.Visibility = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator) ? Visibility.Collapsed : Visibility.Visible;
@@ -61,6 +63,7 @@ public partial class MainWindow : Window
         CommandBindings.Add(new CommandBinding(ApplicationCommands.Open, (_, _) => PickSource_Click(this, new RoutedEventArgs())));
         Loaded += Window_Loaded;
         UpdateControls();
+        UpdateMediaProfileUI();
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -68,7 +71,8 @@ public partial class MainWindow : Window
         try
         {
             if (arguments.Contains("--capture", StringComparer.Ordinal)) SourceMode.SelectedIndex = 1;
-            if (ArgumentValue("--verify-source-handoff") is { } handoffProof) VerifySourceHandoff(handoffProof);
+            if (ArgumentValue("--verify-video-workbench") is { } videoProof) await VerifyVideoWorkbenchAsync(videoProof);
+            else if (ArgumentValue("--verify-source-handoff") is { } handoffProof) VerifySourceHandoff(handoffProof);
             else if (ArgumentValue("--verify-recycle-workbench") is { } recycleProof) await VerifyRecycleWorkbenchAsync(recycleProof);
             else if (ArgumentValue("--verify-folder-workbench") is { } folderProof) await VerifyFolderWorkbenchAsync(folderProof);
             else if (ArgumentValue("--verify-documents-workbench") is { } documentsProof) await VerifyDocumentsProfileAsync(documentsProof);
@@ -77,7 +81,7 @@ public partial class MainWindow : Window
             else if (ArgumentValue("--verify-cancel") is { } cancelProof) await VerifyCancellationAsync(cancelProof);
             else if (ArgumentValue("--verify-deep-workbench") is { } deepProof) await VerifyDeepWorkbenchAsync(deepProof);
             else if (ArgumentValue("--verify-workbench") is { } proof) await VerifyWorkbenchAsync(proof);
-            else if (arguments.Contains("--scan", StringComparer.Ordinal)) await ScanAsync();
+            else if (arguments.Contains("--scan", StringComparer.Ordinal)) { if (SourceMode.SelectedIndex == 3) await ScanFolderAsync(); else await ScanAsync(); }
             if (ArgumentValue("--render-preview") is { } png)
             {
                 await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
@@ -97,6 +101,7 @@ public partial class MainWindow : Window
             if (ArgumentValue("--verify-documents-workbench") is { } documentsProof) WriteNewJson(documentsProof + ".error.json", new { error = ex.ToString() });
             if (ArgumentValue("--verify-recycle-workbench") is { } recycleProof) WriteNewJson(recycleProof + ".error.json", new { error = ex.ToString() });
             if (ArgumentValue("--verify-folder-workbench") is { } folderProof) WriteNewJson(folderProof + ".error.json", new { error = ex.ToString() });
+            if (ArgumentValue("--verify-video-workbench") is { } videoProof) WriteNewJson(videoProof + ".error.json", new { error = ex.ToString() });
             if (ArgumentValue("--render-preview") is { } png)
             {
                 try { CaptureWindow(png); } catch (IOException) { }
@@ -157,12 +162,12 @@ public partial class MainWindow : Window
         PreviewPlaceholder.Visibility = Visibility.Visible;
         CandidateDetails.Text = "";
         OpenOutputButton.Visibility = Visibility.Collapsed;
-        await RunJobAsync("Bilddaten werden gesucht…", async (progress, token) =>
+        await RunJobAsync("Mediendaten werden gesucht…", async (progress, token) =>
         {
             if (deep)
                 report = await PhotoRecEngine.RunAsync(source, work!, deepOptions, progress, token);
             else
-                report = await PhotoCarver.ScanAsync(source, nativeOptions, progress, token);
+                report = await MediaCarver.ScanAsync(source, nativeOptions, ReadMediaTypes(), progress, token);
         });
         if (report is null) return;
         ApplyReport(report);
@@ -192,6 +197,7 @@ public partial class MainWindow : Window
         clock.Restart();
         lastProgress = null;
         activeCancellation = new CancellationTokenSource();
+        long thisJob = ++jobGeneration;
         StatusLabel.Text = label;
         ProgressDetail.Text = "Vorgang wird vorbereitet…";
         WorkProgress.Value = 0;
@@ -202,6 +208,7 @@ public partial class MainWindow : Window
         {
             var progress = new Progress<RecoveryProgress>(value =>
             {
+                if (!busy || thisJob != jobGeneration) return;
                 lastProgress = value;
                 RenderProgress();
                 if (verifyCancelAfterFirstChunk && value.Stage == "scanning" && value.BytesDone > 0 && activeCancellation?.IsCancellationRequested == false) Cancel_Click(this, new RoutedEventArgs());
@@ -284,7 +291,7 @@ public partial class MainWindow : Window
         if (RecycleResultsPanel is not null) RecycleResultsPanel.Visibility = recycle ? Visibility.Visible : Visibility.Collapsed;
         if (EngineBox is not null) EngineBox.Visibility = folder ? Visibility.Collapsed : Visibility.Visible;
         if (FolderLimitsPanel is not null) FolderLimitsPanel.Visibility = folder ? Visibility.Visible : Visibility.Collapsed;
-        if (SearchModeLabel is not null) SearchModeLabel.Text = folder ? "Bilddaten in vorhandenen Dateien" : "Suchmodus";
+        if (SearchModeLabel is not null) SearchModeLabel.Text = folder ? "Medien in vorhandenen Dateien" : "Suchmodus";
         if (DeepScopePanel is not null) DeepScopePanel.Visibility = !folder && EngineBox?.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
         if (DeepLimitsPanel is not null) DeepLimitsPanel.Visibility = !folder && EngineBox?.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
         if (folder && EngineDescription is not null) EngineDescription.Text = "Integrierte JPEG-/PNG-Suche mit Quellpfad, Dateioffset und geprüften Kopien. Ein Fund belegt vorhandene Bytes; das vollständige frühere Original ist damit nicht nachgewiesen.";
@@ -293,6 +300,7 @@ public partial class MainWindow : Window
         if (ScanButton is not null) ScanButton.Content = recycle ? "Papierkorb lesen" : folder ? "Ordner durchsuchen" : EngineBox?.SelectedIndex == 1 ? "Tiefensuche starten" : "Bilder suchen";
         if (ready && drive && VolumesBox.Items.Count == 0) await GuardAsync(RefreshVolumesAsync);
         UpdateControls();
+        UpdateMediaProfileUI();
     }
 
     private void Engine_Changed(object sender, SelectionChangedEventArgs e)
@@ -304,6 +312,7 @@ public partial class MainWindow : Window
         if (DeepScopePanel is not null) DeepScopePanel.Visibility = EngineBox.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
         if (DeepLimitsPanel is not null) DeepLimitsPanel.Visibility = EngineBox.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
         if (ScanButton is not null) ScanButton.Content = SourceMode.SelectedIndex == 2 ? "Papierkorb lesen" : SourceMode.SelectedIndex == 3 ? "Ordner durchsuchen" : EngineBox.SelectedIndex == 1 ? "Tiefensuche starten" : "Bilder suchen";
+        UpdateMediaProfileUI();
     }
 
     private async void RefreshVolumes_Click(object sender, RoutedEventArgs e) => await GuardAsync(RefreshVolumesAsync);
@@ -355,7 +364,7 @@ public partial class MainWindow : Window
         {
             SourceBox.Text = result.Destination;
             SourceMode.SelectedIndex = 0;
-            StatusLabel.Text = "Abbild gesichert. Du kannst jetzt darin nach Bildern suchen.";
+            StatusLabel.Text = "Abbild gesichert. Du kannst jetzt darin nach Fotos, Videos und weiteren Daten suchen.";
         }
     }
 
@@ -375,7 +384,7 @@ public partial class MainWindow : Window
             visible.Add(row);
         }
         EmptyPanel.Visibility = visible.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        if (visible.Count == 0) EmptyPanel.Children.OfType<TextBlock>().First().Text = report.Candidates.Count > 0 ? "Kein Fund passt zum Filter." : "In diesem Profil keine Bilder gefunden.";
+        if (visible.Count == 0) EmptyPanel.Children.OfType<TextBlock>().First().Text = report.Candidates.Count > 0 ? "Kein Fund passt zum Filter." : "In diesem Profil keine passenden Mediendaten gefunden.";
         UpdateControls();
     }
 
@@ -399,6 +408,7 @@ public partial class MainWindow : Window
         PreviewPlaceholder.Visibility = Visibility.Visible;
         PreviewTitle.Text = CandidateRow.NameFor(candidate);
         PreviewStatus.Text = CandidateRow.LabelFor(candidate.State) + ". " + (candidate.DeletionStatus == "unknown" ? "Löschstatus unbekannt." : "Löschstatus: " + candidate.DeletionStatus);
+        if (IsVideoKind(candidate.Kind)) PreviewStatus.Text += " Video-Container: Struktur und Kopierbarkeit sind keine Abspielgarantie.";
         CandidateDetails.Text = $"Format  {candidate.Kind.ToUpperInvariant()}\nGröße   {FormatBytes(candidate.Length)}\n" + (candidate.StoredPath is null ? $"Quelloffset  {candidate.Offset:N0}\nQuelle  {sourceReport.Source.Path}" : $"Rekonstruktion\n{candidate.StoredPath}\nQuelloffset  nicht verifiziert") + $"\nZuordnung  {candidate.Mapping}\n\n{candidate.Validation}\n\nSHA-256\n{candidate.Sha256}" + (candidate.Diagnostics.Count > 0 ? "\n\n" + string.Join("\n", candidate.Diagnostics) : "");
         if (!caseCanRecover && candidateSource is null)
         {
@@ -423,7 +433,7 @@ public partial class MainWindow : Window
 
     private static BitmapSource BuildPreview(RecoveryReport sourceReport, RecoveryCandidate candidate, CancellationToken token)
     {
-        if (candidate.Kind.ToLowerInvariant() is not ("jpeg" or "jpg" or "png")) throw new InvalidDataException("Die sichere Bildvorschau unterstützt JPEG und PNG. Andere Funddateien können als unveränderte Kopie gesichert werden.");
+        if (candidate.Kind.ToLowerInvariant() is not ("jpeg" or "jpg" or "png")) throw new InvalidDataException(IsVideoKind(candidate.Kind) ? "Die sichere Bildvorschau unterstützt JPEG und PNG. Video-Container werden nicht automatisch geöffnet oder abgespielt. Du kannst die vorhandenen Bytes als geprüfte Kopie sichern." : "Die sichere Bildvorschau unterstützt JPEG und PNG. Andere Dateitypen können als unveränderte Kopie gesichert werden.");
         if (candidate.Length <= 0 || candidate.Length > 64L * 1024 * 1024) throw new InvalidDataException("Die Vorschau ist auf Bilddateien bis 64 MiB begrenzt.");
         var path = candidate.StoredPath ?? sourceReport.Source.Path;
         using var source = PathSafety.OpenRead(path);
@@ -497,6 +507,9 @@ public partial class MainWindow : Window
         FolderSourcePanel.IsEnabled = !busy;
         EngineBox.IsEnabled = !busy;
         DeepScopeBox.IsEnabled = !busy;
+        MediaScopeBox.IsEnabled = !busy;
+        DeepMdatCheck.IsEnabled = !busy;
+        VideoPresetButton.IsEnabled = !busy;
         ProfileExpander.IsEnabled = !busy;
         FragmentsCheck.IsEnabled = !busy;
         ScanButton.IsEnabled = !busy && SourceMode.SelectedIndex != 1;
@@ -558,10 +571,10 @@ public partial class MainWindow : Window
         while (value >= 1024 && index < units.Length - 1) { value /= 1024; index++; }
         return $"{value.ToString(index == 0 ? "N0" : "N1", CultureInfo.CurrentCulture)} {units[index]}";
     }
-    private static string EngineLabel(string engine) => engine.Contains("photorec", StringComparison.OrdinalIgnoreCase) ? "PhotoRec" : "Integrierte Bildsuche";
+    private static string EngineLabel(string engine) => engine.Contains("photorec", StringComparison.OrdinalIgnoreCase) ? "PhotoRec" : engine is "native-media-carver" or "native-video-carver" ? "Integrierte Mediensuche" : "Integrierte Bildsuche";
     private static string StageLabel(string stage) => stage.ToLowerInvariant() switch
     {
-        "scan" or "scanning" => "Bilddaten werden gesucht",
+        "scan" or "scanning" => "Mediendaten werden gesucht",
         "hash" or "hashing" or "hashing_source" => "Quelldaten werden geprüft",
         "preparing_engine" => "PhotoRec wird geprüft und vorbereitet",
         "assessing_output" => "Funddateien werden geprüft",
@@ -572,7 +585,7 @@ public partial class MainWindow : Window
         "recycle_scan" or "scanning_recycle" => "Windows-Papierkorb wird gelesen",
         "recycle_restore" or "restoring_recycle" => "Papierkorb-Datei wird als geprüfte Kopie gesichert",
         "recycle_copying" => "Papierkorb-Datei wird als neue Kopie gesichert",
-        "folder_scanning" => "Vorhandene Dateien werden nach Bilddaten durchsucht",
+        "folder_scanning" => "Vorhandene Dateien werden nach Mediendaten durchsucht",
         "export" or "exporting" or "recovering" => "Kopien werden gesichert",
         "capture" or "capturing" => "Abbild wird gesichert",
         "verify_capture" => "Gesichertes Abbild wird erneut geprüft",

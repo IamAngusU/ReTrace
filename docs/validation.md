@@ -112,3 +112,31 @@ actual Windows Explorer cache folder. It read 22 accessible ordinary files
 three containers. No image contents were exported or rendered. Locked entries
 and the deliberately zero-depth profile produced an explicit partial report.
 These can be derived icon/thumbnail images, not recovered original photographs.
+
+## Alpha.4: video containers and shared media recovery
+
+Owned one-second 96x64 videos were genuinely encoded as H.264 MP4, MPEG-4 MOV,
+MJPEG AVI, fragmented MP4 and VP9 WebM. Each original independently decoded
+successfully with FFmpeg 7.1 from a private imageio-ffmpeg 0.6.0 test installation.
+FFmpeg is a validation tool here, not a new app requirement or bundled decoder.
+
+The native MP4/MOV/AVI parser recovered the exact known byte spans and SHA-256
+values from a separate 8-MiB image, including MP4 and MOV headers crossing source
+read-block boundaries. Ordinary MP4/MOV/AVI reached supported structural
+completion. Fragmented MP4 retained its exact bytes but stayed partial because
+its fragment addressing is not reconstructed. An EOF-truncated MOV stayed partial
+with the exact retained-prefix hash. All Media additionally found the ten JPEG
+frames embedded in the MJPEG AVI. The source hash matched the independently
+recorded image. This does not certify arbitrary real-device fragment recovery.
+
+The shared media scanner reads photos and videos in one streaming source pass;
+random-access candidate validation and hashing remain separately bounded.
+Deterministic core tests cover selected formats, boundary offsets, cancellation,
+aggregate candidate quotas, exact export, saved video investigations and folder
+video profiles. Structural fixtures in CI do not claim decodable compressed
+video samples; genuine encoded/decoded fixtures are a separate local check.
+
+The specialist video preset uses PhotoRec 7.2's actual `mov`, `riff`, `mkv`,
+`asf` and `mpg` format families, verified against its pinned source. Optional
+`mov/mdat` preserves separate media-data fragments. There is no automatic header
+pairing or claim that isolated mdat data forms a playable original recording.

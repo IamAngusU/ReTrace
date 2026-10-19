@@ -12,6 +12,7 @@ public static class PhotoRecTests
         {
             CommandArgumentsAreLiteral(root);
             AllFileTypesUseFixedCommand(root);
+            VideoFamiliesUseVerifiedUpstreamNames(root);
             AllNumberedOutputDirectoriesAreCounted(root);
             OutputBudgetsApplyAcrossDirectories(root);
             UnexpectedDirectoriesAreRefused(root);
@@ -58,6 +59,20 @@ public static class PhotoRecTests
         File.WriteAllBytes(Path.Combine(Directory.CreateDirectory(Path.Combine(run, "recup.12")).FullName, "f0003.pdf"), [6]);
         var inventory = PhotoRecEngine.InspectOutput(run, new());
         Check(inventory.Files.Count == 3 && inventory.Bytes == 6 && inventory.LimitReason is null, "Rollover directories must be inventoried.");
+    }
+
+    private static void VideoFamiliesUseVerifiedUpstreamNames(string root)
+    {
+        var start = PhotoRecEngine.BuildStartInfo("photorec_win.exe", "image.img", root,
+            new() { Types = ["mp4", "mov", "avi", "wav", "mkv", "webm", "wmv", "asf", "mpg", "mov/mdat"] });
+        Check(start.ArgumentList[7] == "partition_none,options,keep_corrupted_file,paranoid,fileopt,everything,disable,mov,enable,riff,enable,mkv,enable,asf,enable,mpg,enable,mov/mdat,enable,wholespace,search", "Video aliases must map to the verified upstream family names exactly once.");
+        Check(!start.ArgumentList[7].Contains(",mp4,") && !start.ArgumentList[7].Contains(",avi,") && !start.ArgumentList[7].Contains(",webm,"), "Friendly media extensions cannot be sent as unknown PhotoRec family selectors.");
+        var media = PhotoRecEngine.BuildStartInfo("photorec_win.exe", "image.img", root,
+            new() { Types = ["jpg", "png", "mov", "avi", "mkv", "wmv", "mpg"] });
+        Check(media.ArgumentList[7].Contains("jpg,enable,png,enable,mov,enable,riff,enable,mkv,enable,asf,enable,mpg,enable", StringComparison.Ordinal), "The media preset must enable photos and verified video families.");
+        Throws<ArgumentException>(() => PhotoRecEngine.ValidateOptions(new() { Types = ["mov,enable,inter"] }));
+        Throws<ArgumentException>(() => PhotoRecEngine.ValidateOptions(new() { Types = ["mov/mdat,enable"] }));
+        Throws<ArgumentException>(() => PhotoRecEngine.ValidateOptions(new() { Types = ["mp4", "mp4"] }));
     }
 
     private static void OutputBudgetsApplyAcrossDirectories(string root)

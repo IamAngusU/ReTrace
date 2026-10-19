@@ -29,7 +29,7 @@ public sealed record RecoveryCandidate
 public sealed record RecoveryReport
 {
     public string Schema { get; init; } = "retrace.recovery.v1";
-    public string Version { get; init; } = "0.1.0-alpha.3";
+    public string Version { get; init; } = "0.1.0-alpha.4";
     public required SourceIdentity Source { get; init; }
     public string Engine { get; init; } = "native-photo-carver";
     public string Status { get; init; } = "complete_within_profile";

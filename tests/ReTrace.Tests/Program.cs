@@ -13,6 +13,22 @@ if (args is ["--scan-recycle", var copiedBin])
     Console.WriteLine(JsonSerializer.Serialize(await RecycleBinRecovery.ScanAsync(Path.GetFullPath(copiedBin))));
     return 0;
 }
+if (args is ["--scan-windows-recycle"])
+{
+    Console.WriteLine(JsonSerializer.Serialize(await RecycleBinRecovery.ScanAsync()));
+    return 0;
+}
+if (args is ["--scan-media", var mediaSource])
+{
+    Console.WriteLine(JsonSerializer.Serialize(await MediaCarver.ScanAsync(Path.GetFullPath(mediaSource))));
+    return 0;
+}
+if (args is ["--scan-media-folder", var mediaFolder])
+{
+    Console.WriteLine(JsonSerializer.Serialize(await FolderRecovery.ScanAsync(Path.GetFullPath(mediaFolder),
+        new() { Types = ["jpeg", "png", "mp4", "mov", "avi"] })));
+    return 0;
+}
 if (args is ["--write-fixture", var destination])
 {
     var path = Path.GetFullPath(destination);
@@ -23,9 +39,20 @@ if (args is ["--write-fixture", var destination])
     output.Write(CarverFixtures.Png()[..^12]);
     return 0;
 }
+if (args is ["--write-video-fixture", var videoDestination])
+{
+    using var output = new FileStream(Path.GetFullPath(videoDestination), FileMode.CreateNew, FileAccess.Write, FileShare.None);
+    output.Write(new byte[1048570]);
+    output.Write(VideoCarverTests.Mp4());
+    output.Write(new byte[19]);
+    output.Write(VideoCarverTests.Avi());
+    return 0;
+}
 try
 {
     checks["carver"] = CarverTests.Run();
+    checks["video_carver"] = await VideoCarverTests.RunAsync();
+    checks["media_integration"] = await MediaIntegrationTests.RunAsync();
     checks["export"] = ExportTests.Run();
     checks["volume_capture"] = await VolumeTests.RunAsync();
     checks["photorec"] = await PhotoRecTests.RunAsync();

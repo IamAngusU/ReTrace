@@ -30,6 +30,14 @@ jobs:
           $arguments = @('--source', ('"' + $fixture + '"'), '--verify-workbench', ('"' + $proof + '"'), '--render-preview', ('"' + $image + '"'))
           $process = Start-Process -FilePath $executable -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
           if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $proof)) { throw 'Native workflow failed.' }
+          $videoFixture = Join-Path $env:RUNNER_TEMP 'retrace-owned-video.img'
+          dotnet run --no-build --project tests/ReTrace.Tests/ReTrace.Tests.csproj -c Release -- --write-video-fixture $videoFixture
+          if ($LASTEXITCODE -ne 0) { throw 'Structural video fixture creation failed.' }
+          $videoProof = Join-Path $env:RUNNER_TEMP 'retrace-video-proof.json'
+          $videoImage = Join-Path $env:RUNNER_TEMP 'retrace-video-preview.png'
+          $videoArguments = @('--source', ('"' + $videoFixture + '"'), '--verify-video-workbench', ('"' + $videoProof + '"'), '--render-preview', ('"' + $videoImage + '"'))
+          $process = Start-Process -FilePath $executable -ArgumentList $videoArguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $videoProof)) { throw 'Native structural video workflow failed.' }
           $session = Join-Path $env:RUNNER_TEMP 'retrace-session-proof.json'
           $sessionImage = Join-Path $env:RUNNER_TEMP 'retrace-session-preview.png'
           $sessionArguments = @('--source', ('"' + $fixture + '"'), '--verify-session-workbench', ('"' + $session + '"'), '--render-preview', ('"' + $sessionImage + '"'))

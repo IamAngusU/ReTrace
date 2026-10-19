@@ -11,6 +11,7 @@ public static class PhotoCarver
     private const int BlockBytes = 1024 * 1024;
     private static readonly byte[] PngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
     private static readonly uint[] CrcTable = MakeCrcTable();
+    private static readonly SearchValues<byte> MediaMarkers = SearchValues.Create((ReadOnlySpan<byte>)[0x89, 0xff, (byte)'f', (byte)'R']);
 
     public static RecoveryCandidate? AssessFile(string path, string kind, long maximumFileBytes = 64L * 1024 * 1024)
     {
@@ -27,19 +28,24 @@ public static class PhotoCarver
         IProgress<RecoveryProgress>? progress = null, CancellationToken cancellationToken = default)
         => Task.Run(() => Scan(source, options ?? new(), progress, cancellationToken), CancellationToken.None);
 
-    private static RecoveryReport Scan(string source, RecoveryOptions options, IProgress<RecoveryProgress>? progress, CancellationToken token)
+    internal static Task<RecoveryReport> ScanMediaAsync(string source, RecoveryOptions options, HashSet<string> types,
+        IProgress<RecoveryProgress>? progress, CancellationToken token)
+        => Task.Run(() => Scan(source, options, progress, token, types), CancellationToken.None);
+
+    private static RecoveryReport Scan(string source, RecoveryOptions options, IProgress<RecoveryProgress>? progress, CancellationToken token, HashSet<string>? types = null)
     {
         if (options.MaximumFileBytes < 128 || options.MaximumFileBytes > 1024L * 1024 * 1024 ||
             options.MaximumFragmentBytes < 128 || options.MaximumFragmentBytes > 16L * 1024 * 1024 ||
             options.MaximumCandidates is < 1 or > 100000 || options.MaximumSourceBytes < 1 || options.MaximumSourceBytes > RecoveryLimits.MaximumSourceBytes)
             throw new ArgumentOutOfRangeException(nameof(options), "Recovery limits are outside the supported profile.");
         using FileStream stream = PathSafety.OpenRead(source);
+        bool videoProfile = types?.Any(t => t is "mp4" or "mov" or "avi") == true;
         SourceIdentity identity = PathSafety.Identity(source, stream);
         if (identity.Length > options.MaximumSourceBytes) throw new IOException("The source image exceeds the configured size limit.");
         var candidates = new List<RecoveryCandidate>();
         var diagnostics = new List<string>();
         using var sourceHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        byte[] buffer = ArrayPool<byte>.Shared.Rent(BlockBytes + 8);
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(BlockBytes + 16);
         long scanned = 0, lastSignature = -1;
         long validationSpans = 0;
         long validationBudget = Math.Max(256L * 1024 * 1024, identity.Length * 4);
@@ -48,7 +54,7 @@ public static class PhotoCarver
         bool stopped = false;
         try
         {
-            progress?.Report(new("scanning", 0, identity.Length, 0, "Reading the image and validating JPEG/PNG structures."));
+            progress?.Report(new("scanning", 0, identity.Length, 0, videoProfile ? "Reading one source pass and validating selected photo/video structures." : "Reading the image and validating JPEG/PNG structures."));
             while (true)
             {
                 token.ThrowIfCancellationRequested();
@@ -62,15 +68,19 @@ public static class PhotoCarver
                 {
                     // Skip non-signature bytes with the runtime's vectorized span search.
                     // Keep the final seven bytes for cross-block signatures as before.
-                    int next = buffer.AsSpan(at, available - 7 - at).IndexOfAny((byte)0x89, (byte)0xff);
+                    int next = videoProfile ? buffer.AsSpan(at, available - 7 - at).IndexOfAny(MediaMarkers)
+                        : buffer.AsSpan(at, available - 7 - at).IndexOfAny((byte)0x89, (byte)0xff);
                     if (next < 0) break;
                     at += next;
                     byte b = buffer[at];
-                    long offset = start + at;
+                    bool movie = videoProfile && b == (byte)'f' && at >= 4 && buffer.AsSpan(at, 4).SequenceEqual("ftyp"u8);
+                    bool avi = videoProfile && types!.Contains("avi") && b == (byte)'R' && at + 12 <= available &&
+                        buffer.AsSpan(at, 4).SequenceEqual("RIFF"u8) && buffer.AsSpan(at + 8, 4).SequenceEqual("AVI "u8);
+                    long offset = start + at - (movie ? 4 : 0);
                     if (offset <= lastSignature) continue;
-                    bool png = b == 0x89 && at + 8 <= available && buffer.AsSpan(at, 8).SequenceEqual(PngSignature);
-                    bool jpeg = b == 0xff && buffer[at + 1] == 0xd8 && buffer[at + 2] == 0xff && IsJpegInitialMarker(buffer[at + 3]);
-                    if (!png && !jpeg) continue;
+                    bool png = (types is null || types.Contains("png")) && b == 0x89 && buffer.AsSpan(at, 8).SequenceEqual(PngSignature);
+                    bool jpeg = (types is null || types.Contains("jpeg")) && b == 0xff && buffer[at + 1] == 0xd8 && buffer[at + 2] == 0xff && IsJpegInitialMarker(buffer[at + 3]);
+                    if (!png && !jpeg && !movie && !avi) continue;
                     lastSignature = offset;
                     if (++signatures > options.MaximumCandidates)
                     {
@@ -78,6 +88,29 @@ public static class PhotoCarver
                         status = "partial_signature_limit";
                         stopped = true;
                         break;
+                    }
+                    if (movie || avi)
+                    {
+                        // Video assessment uses random access and leaves the streaming source cursor intact.
+                        RecoveryCandidate? video = VideoCarver.AssessAt(stream, offset, options.MaximumFileBytes, token);
+                        if (video is null) continue;
+                        validationSpans = checked(validationSpans + 2 * video.Length);
+                        if (validationSpans > validationBudget)
+                        {
+                            diagnostics.Add("Overlapping candidate validation budget reached; later source regions were not examined.");
+                            status = "partial_validation_budget"; stopped = true; break;
+                        }
+                        if (!types!.Contains(video.Kind) || video.State == "partial" && !options.IncludeFragments) continue;
+                        long videoLength = video.State == "partial" ? Math.Min(video.Length, options.MaximumFragmentBytes) : video.Length;
+                        if (videoLength != video.Length)
+                        {
+                            validationSpans = checked(validationSpans + videoLength);
+                            video = video with { Length = videoLength, Id = $"{video.Kind}-{offset:x16}-{videoLength:x}",
+                                Sha256 = HashRange(stream, offset, videoLength, token),
+                                Diagnostics = [..video.Diagnostics, "Partial fragment capped by the recovery profile; bytes were not repaired or padded."] };
+                        }
+                        candidates.Add(video);
+                        continue;
                     }
                     ParseResult parsed = png ? ParsePng(stream, offset, options.MaximumFileBytes, token) : ParseJpeg(stream, offset, options.MaximumFileBytes, token);
                     validationSpans = checked(validationSpans + parsed.Length);
@@ -102,9 +135,9 @@ public static class PhotoCarver
                         Validation = parsed.Validation, Name = $"{kind}_{offset:x16}.{(png ? "png" : "jpg")}", Diagnostics = notes
                     });
                 }
-                progress?.Report(new("scanning", scanned, identity.Length, candidates.Count, "Contiguous image structures; deletion status remains unknown."));
+                progress?.Report(new("scanning", scanned, identity.Length, candidates.Count, "Contiguous media structures; deletion status remains unknown."));
                 if (stopped) break;
-                carry = Math.Min(7, available);
+                carry = Math.Min(videoProfile ? 11 : 7, available);
                 buffer.AsSpan(available - carry, carry).CopyTo(buffer);
             }
         }
@@ -119,10 +152,10 @@ public static class PhotoCarver
         progress?.Report(new(status, scanned, identity.Length, candidates.Count, "Scan finished."));
         return new()
         {
-            Source = identity with { Sha256 = sourceSha }, Status = status, ScannedBytes = scanned, Candidates = candidates, Diagnostics = diagnostics,
-            Limitations = ["Only contiguous JPEG and PNG byte sequences are examined by this profile. Fragmented files and other formats need a filesystem or specialist recovery engine.",
+            Source = identity with { Sha256 = sourceSha }, Engine = videoProfile ? "native-media-carver" : "native-photo-carver", Status = status, ScannedBytes = scanned, Candidates = candidates, Diagnostics = diagnostics,
+            Limitations = [videoProfile ? "Only selected contiguous JPEG/PNG/MP4/MOV/AVI structures are examined in one source pass. Fragment stitching, codecs and other formats need a specialist engine." : "Only contiguous JPEG and PNG byte sequences are examined by this profile. Fragmented files and other formats need a filesystem or specialist recovery engine.",
                 "A format signature does not establish that a file was deleted. Existing embedded images can also be found.",
-                "Complete means supported format structure reached its terminator; pixels have not been decoded, and authenticity is not established.",
+                "Complete means supported format structure reached its boundary; pixels/frames have not been decoded, playability and authenticity are not established.",
                 "Overwritten, TRIM-discarded or encrypted content cannot be reconstructed from missing plaintext bytes.",
                 $"Validation is bounded to {options.MaximumCandidates} signatures, {options.MaximumFileBytes} bytes per complete candidate and {options.MaximumFragmentBytes} bytes per partial fragment.",
                 $"Overlapping validation and hashing spans are limited to {validationBudget} bytes; reaching this budget produces an explicit partial report."]
