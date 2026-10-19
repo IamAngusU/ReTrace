@@ -1,6 +1,6 @@
 # Validation scope, 2026-10-19
 
-This is an independently runnable first preview, not a promise of exhaustive
+This is an independently runnable alpha.2 preview, not a promise of exhaustive
 recovery or a completed data-recovery certification.
 
 The dependency-free C# test runner checks native JPEG/PNG parsing, PNG CRCs,
@@ -45,3 +45,40 @@ The portable package inventories all binaries, matching .NET notices and the
 unchanged pinned PhotoRec binary/source archives. Hashes detect byte changes;
 they are not a publisher signature. Hosted CI is a separate result from local
 Windows validation and must not be claimed successful unless it actually ran.
+
+## Alpha.2 improvements
+
+The shared source bound is 16 TiB. A synthetic sparse file larger than 4 TiB
+tests 64-bit source lengths, bounded early cancellation, an exact selected
+export above the 4-TiB offset, and a deliberately smaller caller budget.
+This is not a full multi-terabyte scan or a physical-drive recovery benchmark.
+The test marks its newly created file sparse before extending it; a sparse
+filesystem failure never falls back to allocating terabytes.
+
+Saved investigations have strict bounded JSON validation, duplicate-key and
+candidate-range checks, metadata-only library management and explicit
+unavailable/changed-source states. Native source reopening checks identity
+metadata; selected export independently hashes the candidate again. Saved
+specialist output is checked against its recorded hashes, including when the
+original image is disconnected. A modified metadata file is not authenticated
+by a publisher signature.
+
+Native session tests scan, save, clear, reload without rescanning, preview and
+export with independent output hashes and source-preservation checks. Advanced
+PhotoRec limits and selected format groups are actual engine options. They do
+not turn a timed-out or quota-limited scan into complete coverage.
+
+IamAngusU/ReTrace is the canonical private source repository; angusu-de/ReTrace
+is the CI-only mirror. Hosted billing failures remain separate from the local
+Windows checks and do not count as passing CI.
+
+The alpha.2 local C# run passed 193 assertions, including 71 investigation
+checks. Corrupt library metadata can be explicitly removed through the exact
+checked Windows file handle; a locked entry is retained. Mid-write cancellation
+does not publish a case or leave its owned temporary metadata file.
+
+The signature search skips non-header bytes with a vectorized span search.
+On one mostly empty 128-MiB synthetic image, three warm scans changed from
+256.96/256.94/258.43 ms to 178.58/175.28/173.69 ms with the same four candidates
+and source SHA-256. BF6 was not detected during this local comparison.
+This is a narrow warm-cache measurement, not a disk-speed or gaming benchmark.

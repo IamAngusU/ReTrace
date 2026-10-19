@@ -17,7 +17,7 @@ public static class VolumeAcquisition
     private const uint GenericRead = 0x80000000, OpenExisting = 3;
     private const uint VolumeExtents = 0x560000, StorageQuery = 0x2d1400, DiskLength = 0x7405c, AllowExtendedRead = 0x90083;
     private const int BlockBytes = 4 * 1024 * 1024;
-    private const long MaximumVolumeBytes = 2L * 1024 * 1024 * 1024 * 1024;
+    private const long MaximumVolumeBytes = RecoveryLimits.MaximumSourceBytes;
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
@@ -125,7 +125,7 @@ public static class VolumeAcquisition
         if (!DeviceIoControl(handle, DiskLength, IntPtr.Zero, 0, rawLength, 8, out var returned, IntPtr.Zero) || returned != 8)
             throw new IOException("Die genaue Laufwerksgröße konnte nicht gelesen werden.");
         var length = BitConverter.ToInt64(rawLength);
-        if (length <= 0 || length > MaximumVolumeBytes || length % 512 != 0) throw new IOException("Dieses Laufwerk liegt außerhalb des Aufnahmeprofils (maximal 2 TiB; 512-Byte-Ausrichtung).");
+        if (length <= 0 || length > MaximumVolumeBytes || length % 512 != 0) throw new IOException("Dieses Laufwerk liegt außerhalb des Aufnahmeprofils (maximal 16 TiB; 512-Byte-Ausrichtung).");
         // This read-only handle still enforces the driver partition boundary.
         // NTFS normally hides trailing partition sectors from ordinary reads.
         if (!DeviceIoControl(handle, AllowExtendedRead, IntPtr.Zero, 0, [], 0, out _, IntPtr.Zero))

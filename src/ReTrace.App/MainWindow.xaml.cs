@@ -59,7 +59,10 @@ public partial class MainWindow : Window
         try
         {
             if (arguments.Contains("--capture", StringComparer.Ordinal)) SourceMode.SelectedIndex = 1;
-            if (ArgumentValue("--verify-cancel") is { } cancelProof) await VerifyCancellationAsync(cancelProof);
+            if (ArgumentValue("--verify-documents-workbench") is { } documentsProof) await VerifyDocumentsProfileAsync(documentsProof);
+            else if (ArgumentValue("--verify-session-workbench") is { } sessionProof) await VerifySessionWorkbenchAsync(sessionProof);
+            else if (ArgumentValue("--case") is { } savedCase) await LoadCaseAsync(savedCase);
+            else if (ArgumentValue("--verify-cancel") is { } cancelProof) await VerifyCancellationAsync(cancelProof);
             else if (ArgumentValue("--verify-deep-workbench") is { } deepProof) await VerifyDeepWorkbenchAsync(deepProof);
             else if (ArgumentValue("--verify-workbench") is { } proof) await VerifyWorkbenchAsync(proof);
             else if (arguments.Contains("--scan", StringComparer.Ordinal)) await ScanAsync();
@@ -77,6 +80,8 @@ public partial class MainWindow : Window
             if (ArgumentValue("--verify-workbench") is { } proof) WriteNewJson(proof + ".error.json", new { error = ex.ToString() });
             if (ArgumentValue("--verify-cancel") is { } cancelProof) WriteNewJson(cancelProof + ".error.json", new { error = ex.ToString() });
             if (ArgumentValue("--verify-deep-workbench") is { } deepProof) WriteNewJson(deepProof + ".error.json", new { error = ex.ToString() });
+            if (ArgumentValue("--verify-session-workbench") is { } sessionProof) WriteNewJson(sessionProof + ".error.json", new { error = ex.ToString() });
+            if (ArgumentValue("--verify-documents-workbench") is { } documentsProof) WriteNewJson(documentsProof + ".error.json", new { error = ex.ToString() });
             if (ArgumentValue("--render-preview") is { } png)
             {
                 try { CaptureWindow(png); } catch (IOException) { }
@@ -102,14 +107,15 @@ public partial class MainWindow : Window
         if (!Path.IsPathFullyQualified(source) || !File.Exists(source)) throw new InvalidDataException("Wähle zuerst eine vorhandene Abbilddatei mit absolutem Pfad.");
         string? work = explicitDeepWork;
         var deep = EngineBox.SelectedIndex == 1;
+        var nativeOptions = ReadNativeOptions();
+        var deepOptions = deep ? ReadPhotoRecOptions() : null;
         if (deep && work is null)
         {
             var folder = new OpenFolderDialog { Title = "PhotoRec-Arbeitsordner: Ziel auf einem anderen Datenträger wählen", Multiselect = false };
             if (folder.ShowDialog(this) != true) return;
             work = NewDirectoryName(folder.FolderName, "ReTrace-Tiefensuche");
         }
-        report = null;
-        visible.Clear();
+        ClearCurrentInvestigation();
         EmptyPanel.Visibility = Visibility.Visible;
         EmptyPanel.Children.OfType<TextBlock>().First().Text = "Die Suche läuft.";
         ResultsSummary.Text = "Funde werden nach Abschluss oder Abbruch zur Prüfung angezeigt.";
@@ -121,18 +127,24 @@ public partial class MainWindow : Window
         await RunJobAsync("Bilddaten werden gesucht…", async (progress, token) =>
         {
             if (deep)
-                report = await PhotoRecEngine.RunAsync(source, work!, new PhotoRecOptions { IncludeBroken = FragmentsCheck.IsChecked == true, Types = DeepScopeBox.SelectedIndex == 1 ? ["all"] : ["jpg", "png"] }, progress, token);
+                report = await PhotoRecEngine.RunAsync(source, work!, deepOptions, progress, token);
             else
-                report = await PhotoCarver.ScanAsync(source, new RecoveryOptions { IncludeFragments = FragmentsCheck.IsChecked == true }, progress, token);
+                report = await PhotoCarver.ScanAsync(source, nativeOptions, progress, token);
         });
         if (report is null) return;
+        ApplyReport(report);
+    }
+
+    private void ApplyReport(RecoveryReport nextReport, string? loadedMessage = null)
+    {
+        report = nextReport;
         KindFilter.ItemsSource = new[] { "Alle Formate" }.Concat(report.Candidates.Select(c => c.Kind.ToUpperInvariant()).Distinct().Order());
         KindFilter.SelectedIndex = 0;
         StateFilter.SelectedIndex = 0;
         RefreshCandidates();
         ResultsTitle.Text = $"{report.Candidates.Count:N0} Funde";
         ResultsSummary.Text = $"{FormatBytes(report.ScannedBytes)} untersucht · {EngineLabel(report.Engine)} · {ReportStatusLabel(report.Status)}";
-        StatusLabel.Text = report.Status.Contains("cancel", StringComparison.OrdinalIgnoreCase) ? "Suche abgebrochen. Bereits erfasste Funde bleiben prüfbar." : "Suche beendet. Wähle Funde aus, die du sichern möchtest.";
+        StatusLabel.Text = loadedMessage ?? (report.Status.Contains("cancel", StringComparison.OrdinalIgnoreCase) ? "Suche abgebrochen. Bereits erfasste Funde bleiben prüfbar." : "Suche beendet. Wähle Funde aus, die du sichern möchtest.");
         ProgressDetail.Text = report.Diagnostics.Count > 0 ? string.Join(" · ", report.Diagnostics.Take(2)) : "Die Fundliste ist auf das gewählte Suchprofil begrenzt. Keine Garantie auf Vollständigkeit.";
         WorkProgress.IsIndeterminate = false;
         WorkProgress.Value = report.Source.Length > 0 ? Math.Clamp(100.0 * report.ScannedBytes / report.Source.Length, 0, 100) : 0;
@@ -234,6 +246,7 @@ public partial class MainWindow : Window
             ? "PhotoRec sucht weitere Dateitypen und kann beschädigte Dateien behalten. Benötigt einen eigenen Arbeitsordner für gefundene Kopien."
             : "Sucht Bildsignaturen direkt im Abbild. Erkennt vollständige Strukturen und kennzeichnet beschädigte oder abgeschnittene Funde.";
         if (DeepScopePanel is not null) DeepScopePanel.Visibility = EngineBox.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
+        if (DeepLimitsPanel is not null) DeepLimitsPanel.Visibility = EngineBox.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
         if (ScanButton is not null) ScanButton.Content = EngineBox.SelectedIndex == 1 ? "Tiefensuche starten" : "Bilder suchen";
     }
 
@@ -317,6 +330,8 @@ public partial class MainWindow : Window
 
     private async Task PreviewAsync(RecoveryCandidate candidate)
     {
+        var sourceReport = report;
+        if (sourceReport is null) return;
         var generation = ++previewGeneration;
         previewCancellation?.Cancel();
         previewCancellation?.Dispose();
@@ -327,10 +342,15 @@ public partial class MainWindow : Window
         PreviewPlaceholder.Visibility = Visibility.Visible;
         PreviewTitle.Text = CandidateRow.NameFor(candidate);
         PreviewStatus.Text = CandidateRow.LabelFor(candidate.State) + ". " + (candidate.DeletionStatus == "unknown" ? "Löschstatus unbekannt." : "Löschstatus: " + candidate.DeletionStatus);
-        CandidateDetails.Text = $"Format  {candidate.Kind.ToUpperInvariant()}\nGröße   {FormatBytes(candidate.Length)}\nOffset  {candidate.Offset:N0}\nZuordnung  {candidate.Mapping}\n\n{candidate.Validation}\n\nSHA-256\n{candidate.Sha256}" + (candidate.Diagnostics.Count > 0 ? "\n\n" + string.Join("\n", candidate.Diagnostics) : "");
+        CandidateDetails.Text = $"Format  {candidate.Kind.ToUpperInvariant()}\nGröße   {FormatBytes(candidate.Length)}\n" + (candidate.StoredPath is null ? $"Quelloffset  {candidate.Offset:N0}\nQuelle  {report?.Source.Path}" : $"Rekonstruktion\n{candidate.StoredPath}\nQuelloffset  nicht verifiziert") + $"\nZuordnung  {candidate.Mapping}\n\n{candidate.Validation}\n\nSHA-256\n{candidate.Sha256}" + (candidate.Diagnostics.Count > 0 ? "\n\n" + string.Join("\n", candidate.Diagnostics) : "");
+        if (!caseCanRecover)
+        {
+            PreviewPlaceholder.Text = "Die gespeicherte Quelle ist nicht verfügbar oder hat sich verändert. Die Fundliste bleibt lesbar; öffne eine passende, unveränderte Quelle erneut.";
+            return;
+        }
         try
         {
-            var preview = await Task.Run(() => BuildPreview(report!, candidate, token), token);
+            var preview = await Task.Run(() => BuildPreview(sourceReport, candidate, token), token);
             if (generation != previewGeneration) return;
             PreviewImage.Source = preview;
             PreviewPlaceholder.Visibility = Visibility.Collapsed;
@@ -397,14 +417,7 @@ public partial class MainWindow : Window
         ProgressDetail.Text = exported.Diagnostics.Count > 0 ? string.Join(" · ", exported.Diagnostics.Take(2)) : exported.Destination;
     });
 
-    private void SaveReport_Click(object sender, RoutedEventArgs e)
-    {
-        if (report is null) return;
-        var dialog = new SaveFileDialog { Title = "Suchbericht als neue JSON-Datei sichern", FileName = $"ReTrace-Bericht-{DateTime.Now:yyyyMMdd-HHmmss}.json", Filter = "JSON-Suchbericht|*.json", AddExtension = true };
-        if (dialog.ShowDialog(this) != true) return;
-        try { WriteNewJson(dialog.FileName, report); StatusLabel.Text = "Suchbericht gesichert."; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { ShowFailure(ex); }
-    }
+    private async void SaveReport_Click(object sender, RoutedEventArgs e) => await GuardAsync(SaveCaseAsAsync);
 
     private void OpenOutput_Click(object sender, RoutedEventArgs e)
     {
@@ -425,14 +438,19 @@ public partial class MainWindow : Window
         DrivePanel.IsEnabled = !busy;
         EngineBox.IsEnabled = !busy;
         DeepScopeBox.IsEnabled = !busy;
+        ProfileExpander.IsEnabled = !busy;
         FragmentsCheck.IsEnabled = !busy;
         ScanButton.IsEnabled = !busy && SourceMode.SelectedIndex == 0;
         CancelButton.IsEnabled = busy && activeCancellation?.IsCancellationRequested == false;
         CaptureButton.IsEnabled = !busy;
         var count = CandidatesGrid.SelectedItems.Count;
         SelectionSummary.Text = count == 0 ? "Noch keine Funde ausgewählt" : $"{count:N0} Funde ausgewählt · {FormatBytes(CandidatesGrid.SelectedItems.Cast<CandidateRow>().Sum(r => r.Candidate.Length))}";
-        ExportButton.IsEnabled = !busy && report is not null && count > 0;
+        ExportButton.IsEnabled = !busy && caseCanRecover && report is not null && count > 0;
         ReportButton.IsEnabled = !busy && report is not null;
+        SaveLibraryButton.IsEnabled = !busy && report is not null;
+        ClearCaseButton.IsEnabled = !busy && report is not null;
+        OpenCaseButton.IsEnabled = !busy;
+        LibraryButton.IsEnabled = !busy;
     }
 
     private async Task GuardAsync(Func<Task> action)
@@ -485,6 +503,9 @@ public partial class MainWindow : Window
         "hash" or "hashing" or "hashing_source" => "Quelldaten werden geprüft",
         "preparing_engine" => "PhotoRec wird geprüft und vorbereitet",
         "assessing_output" => "Funddateien werden geprüft",
+        "verifying_saved_output" => "Gespeicherte Funddateien werden per SHA-256 geprüft",
+        "investigation_loaded" => "Gespeicherte Untersuchung geladen",
+        "investigation_saved" => "Untersuchung gesichert",
         "export" or "exporting" or "recovering" => "Kopien werden gesichert",
         "capture" or "capturing" => "Abbild wird gesichert",
         "verify_capture" => "Gesichertes Abbild wird erneut geprüft",

@@ -31,7 +31,7 @@ public static class PhotoCarver
     {
         if (options.MaximumFileBytes < 128 || options.MaximumFileBytes > 1024L * 1024 * 1024 ||
             options.MaximumFragmentBytes < 128 || options.MaximumFragmentBytes > 16L * 1024 * 1024 ||
-            options.MaximumCandidates is < 1 or > 100000 || options.MaximumSourceBytes < 1 || options.MaximumSourceBytes > 2L * 1024 * 1024 * 1024 * 1024)
+            options.MaximumCandidates is < 1 or > 100000 || options.MaximumSourceBytes < 1 || options.MaximumSourceBytes > RecoveryLimits.MaximumSourceBytes)
             throw new ArgumentOutOfRangeException(nameof(options), "Recovery limits are outside the supported profile.");
         using FileStream stream = PathSafety.OpenRead(source);
         SourceIdentity identity = PathSafety.Identity(source, stream);
@@ -60,8 +60,12 @@ public static class PhotoCarver
                 scanned += read;
                 for (int at = 0; at <= available - 8; at++)
                 {
+                    // Skip non-signature bytes with the runtime's vectorized span search.
+                    // Keep the final seven bytes for cross-block signatures as before.
+                    int next = buffer.AsSpan(at, available - 7 - at).IndexOfAny((byte)0x89, (byte)0xff);
+                    if (next < 0) break;
+                    at += next;
                     byte b = buffer[at];
-                    if (b != 0x89 && b != 0xff) continue;
                     long offset = start + at;
                     if (offset <= lastSignature) continue;
                     bool png = b == 0x89 && at + 8 <= available && buffer.AsSpan(at, 8).SequenceEqual(PngSignature);

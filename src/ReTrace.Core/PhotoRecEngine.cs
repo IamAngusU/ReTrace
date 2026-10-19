@@ -21,7 +21,7 @@ public sealed record PhotoRecOptions
 /// <summary>Image-only PhotoRec worker. It never mounts or opens a live device.</summary>
 public static class PhotoRecEngine
 {
-    private const long MaximumSourceBytes = 2L * 1024 * 1024 * 1024 * 1024;
+    private const long MaximumSourceBytes = RecoveryLimits.MaximumSourceBytes;
     private static readonly HashSet<string> AllowedTypes = new(StringComparer.Ordinal)
         { "jpg", "png", "pdf", "zip", "wav" };
 
@@ -38,7 +38,7 @@ public static class PhotoRecEngine
         await using var input = PathSafety.OpenRead(source);
         var identity = PathSafety.Identity(source, input);
         if (identity.Length <= 0 || identity.Length > MaximumSourceBytes)
-            throw new IOException("Choose a nonempty ordinary image file of at most 2 TiB.");
+            throw new IOException("Choose a nonempty ordinary image file of at most 16 TiB.");
         // On Windows this sharing mode denies writes and replacement throughout the job.
         if (input.Length != identity.Length)
             throw new IOException("The source changed while opening it.");

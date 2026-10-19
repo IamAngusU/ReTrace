@@ -24,6 +24,8 @@ try
     checks["export"] = ExportTests.Run();
     checks["volume_capture"] = await VolumeTests.RunAsync();
     checks["photorec"] = await PhotoRecTests.RunAsync();
+    checks["large_images"] = await LargeImageTests.RunAsync();
+    checks["investigations"] = await InvestigationTests.RunAsync();
     Console.WriteLine(JsonSerializer.Serialize(new { status = "passed", assertions = checks.Values.Sum(), suites = checks }));
     return 0;
 }

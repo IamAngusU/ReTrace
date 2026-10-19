@@ -10,7 +10,7 @@
         </Border>
         <StackPanel><TextBlock Text="ReTrace" FontSize="26" FontWeight="SemiBold" LineHeight="30"/><TextBlock Text="Eine zweite Chance für deine Dateien." Foreground="{DynamicResource Muted}" FontSize="12"/></StackPanel>
       </StackPanel>
-      <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="0.1 · Vorschauversion" Foreground="{DynamicResource Muted}" Margin="0,0,18,0" VerticalAlignment="Center"/><Button x:Name="ThemeButton" Content="Heller Modus" Click="Theme_Click"/></StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="0.1 alpha 2" Foreground="{DynamicResource Muted}" Margin="0,0,18,0" VerticalAlignment="Center"/><Button x:Name="OpenCaseButton" Content="Untersuchung öffnen…" Click="OpenCase_Click" Margin="0,0,8,0"/><Button x:Name="LibraryButton" Content="Gespeicherte…" Click="Library_Click" Margin="0,0,8,0"/><Button x:Name="ThemeButton" Content="Heller Modus" Click="Theme_Click"/></StackPanel>
     </Grid>
 
     <Border Grid.Row="1" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,0,1" Padding="0,0,0,18" Margin="0,0,0,22">
@@ -29,7 +29,7 @@
           <TextBlock Text="Quelle" Style="{StaticResource Label}"/>
           <ComboBox x:Name="SourceMode" SelectionChanged="SourceMode_Changed"><ComboBoxItem Content="Vorhandenes Datenträgerabbild"/><ComboBoxItem Content="Laufwerk als Abbild sichern"/></ComboBox>
           <StackPanel x:Name="ImagePanel" Margin="0,10,0,0">
-            <TextBox x:Name="SourceBox" Style="{StaticResource MonoBox}" TextWrapping="Wrap" MinHeight="66" MaxHeight="90" VerticalScrollBarVisibility="Auto" ToolTip="Absoluter Pfad zu einer regulären Abbilddatei"/>
+            <TextBox x:Name="SourceBox" Style="{StaticResource MonoBox}" TextWrapping="Wrap" MinHeight="66" MaxHeight="90" VerticalScrollBarVisibility="Auto" ToolTip="Absoluter Pfad zu einer regulären Raw-Abbilddatei bis 16 TiB"/>
             <Button Content="Abbild auswählen…" Click="PickSource_Click" Margin="0,8,0,0" HorizontalAlignment="Stretch"/>
           </StackPanel>
           <StackPanel x:Name="DrivePanel" Visibility="Collapsed" Margin="0,12,0,0">
@@ -43,8 +43,14 @@
           <TextBlock Text="Suchmodus" Style="{StaticResource Label}"/>
           <ComboBox x:Name="EngineBox" SelectionChanged="Engine_Changed"><ComboBoxItem Content="Bildsuche · integriert"/><ComboBoxItem Content="Tiefensuche · PhotoRec"/></ComboBox>
           <TextBlock x:Name="EngineDescription" Style="{StaticResource MutedText}" Margin="0,9,0,0"/>
-          <StackPanel x:Name="DeepScopePanel" Visibility="Collapsed"><TextBlock Text="Dateitypen für PhotoRec" Style="{StaticResource Label}"/><ComboBox x:Name="DeepScopeBox"><ComboBoxItem Content="Fotos · JPEG und PNG"/><ComboBoxItem Content="Alle PhotoRec-Dateitypen"/></ComboBox></StackPanel>
+          <StackPanel x:Name="DeepScopePanel" Visibility="Collapsed"><TextBlock Text="Dateitypen für PhotoRec" Style="{StaticResource Label}"/><ComboBox x:Name="DeepScopeBox"><ComboBoxItem Content="Fotos · JPEG und PNG"/><ComboBoxItem Content="Alle PhotoRec-Dateitypen"/><ComboBoxItem Content="Dokumente · PDF und ZIP"/></ComboBox></StackPanel>
           <CheckBox x:Name="FragmentsCheck" IsChecked="True" Content="Auch Bildfragmente behalten" Margin="0,16,0,0"/>
+          <Expander x:Name="ProfileExpander" Header="Suchprofil anpassen" Margin="0,16,0,0" Foreground="{DynamicResource Ink}"><StackPanel Margin="0,5,0,0">
+            <TextBlock Text="Maximale Fundanzahl" Style="{StaticResource Label}"/><TextBox x:Name="MaximumCandidatesBox" Text="10000" ToolTip="1 bis 100.000 Funde; bei der Bildsuche untersuchte Signaturen"/>
+            <TextBlock Text="Maximale Dateigröße · MiB" Style="{StaticResource Label}"/><TextBox x:Name="MaximumFileMiBBox" Text="64" ToolTip="1 bis 1.024 MiB; Bildvorschau bleibt auf 64 MiB begrenzt"/>
+            <StackPanel x:Name="DeepLimitsPanel" Visibility="Collapsed"><TextBlock Text="PhotoRec-Ausgabe · GiB" Style="{StaticResource Label}"/><TextBox x:Name="MaximumOutputGiBBox" Text="4" ToolTip="1 bis 1.024 GiB; überwachte Abbruchgrenze, kein Datenträgerkontingent"/><TextBlock Text="PhotoRec-Laufzeit · Minuten" Style="{StaticResource Label}"/><TextBox x:Name="TimeoutMinutesBox" Text="60" ToolTip="1 bis 10.080 Minuten; gilt für den PhotoRec-Prozess"/></StackPanel>
+            <TextBlock Text="Beim Erreichen einer Grenze bleibt das Ergebnis als unvollständig gekennzeichnet. Es ist keine vollständige Datenträgeranalyse." Style="{StaticResource MutedText}" FontSize="11" Margin="0,10,0,0"/>
+          </StackPanel></Expander>
           <Border BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Margin="0,22,0,0" Padding="0,16,0,0"><TextBlock Text="Jetzt möglichst wenig auf das betroffene Laufwerk schreiben. Überschriebene oder durch SSD-TRIM entfernte Daten lassen sich möglicherweise nicht zurückholen." Style="{StaticResource MutedText}"/></Border>
         </StackPanel></ScrollViewer><StackPanel Grid.Row="1" Margin="0,14,0,0"><Button x:Name="ScanButton" Content="Bilder suchen" Style="{StaticResource Primary}" Click="Scan_Click"/><Button x:Name="CancelButton" Content="Vorgang abbrechen" Click="Cancel_Click" IsEnabled="False" Margin="0,8,0,0"/></StackPanel></Grid>
       </Border>
@@ -69,7 +75,7 @@
         </Grid>
         <Border Grid.Row="2" BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Padding="0,16,0,0" Margin="0,17,0,0"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
           <StackPanel><TextBlock x:Name="SelectionSummary" Text="Noch keine Bilder ausgewählt" FontWeight="SemiBold"/><TextBlock Text="Signaturfunde können auch vorhandene Bilder sein. Der Löschstatus ist dabei unbekannt." Style="{StaticResource MutedText}" FontSize="11" MaxWidth="440" Margin="0,5,12,0"/></StackPanel>
-          <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top"><Button x:Name="ReportButton" Content="Bericht…" Click="SaveReport_Click" IsEnabled="False" Margin="0,0,8,0"/><Button x:Name="ExportButton" Content="Auswahl sichern…" Style="{StaticResource Primary}" Click="Export_Click" IsEnabled="False"/></StackPanel>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top"><Button x:Name="ClearCaseButton" Content="Schließen" Click="ClearCase_Click" IsEnabled="False" Margin="0,0,8,0"/><Button x:Name="SaveLibraryButton" Content="Merken" Click="SaveLibrary_Click" IsEnabled="False" Margin="0,0,8,0"/><Button x:Name="ReportButton" Content="Bericht sichern…" Click="SaveReport_Click" ToolTip="Als später wieder zu öffnende Untersuchung sichern" IsEnabled="False" Margin="0,0,8,0"/><Button x:Name="ExportButton" Content="Auswahl sichern…" Style="{StaticResource Primary}" Click="Export_Click" IsEnabled="False"/></StackPanel>
         </Grid></Border>
       </Grid>
     </Grid>

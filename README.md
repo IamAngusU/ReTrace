@@ -39,7 +39,7 @@ kein VSS-/Dateisystem-Snapshot und repariert oder sperrt das Quelllaufwerk nicht
 
 ## Was diese Version kann
 
-- Bilder und Fragmente aus regulären Raw-Abbilddateien bis **2 TiB** suchen;
+- Bilder und Fragmente aus regulären Raw-Abbilddateien bis **16 TiB** suchen;
   ein normaler Ordner enthält keine freigegebenen Sektoren gelöschter Dateien.
 - JPEG-Marker sowie PNG-Struktur/CRCs prüfen. Der integrierte Suchlauf arbeitet
   mit Streaming und Dateisperren; Quelldatei-ID, Größe und Änderungszeit bleiben
@@ -50,11 +50,39 @@ kein VSS-/Dateisystem-Snapshot und repariert oder sperrt das Quelllaufwerk nicht
 - Bildvorschau nur für unterstützte Bilddaten, mit Dateigrößen-/Pixelgrenzen und
   begrenzter Decoder-Auflösung. Dokumente und Programme werden nicht ausgeführt.
 - Kopien aus Quellbereichen oder aus dem privaten PhotoRec-Lauf sichern; ein
-  gespeicherter PhotoRec-Bestand lässt sich auf API-Ebene auch ohne ursprüngliche
-  Abbilddatei exportieren. Die Oberfläche verwaltet ihren aktuellen Suchlauf.
+  gespeicherter PhotoRec-Bestand lässt sich auch ohne ursprüngliche Abbilddatei
+  erneut öffnen und exportieren, wenn die aufbewahrten Funddateien die
+  SHA-256-Prüfung bestehen.
 - Laufwerksabbilder als neue Datei mit Protokoll anlegen und den geschriebenen
   Bestand unabhängig erneut per SHA-256 prüfen. Abbruch oder Lesefehler behalten
   einen ausdrücklich unvollständigen Bestand mit bekannter Präfixlänge.
+
+## Untersuchungen später fortsetzen
+
+**Untersuchung speichern** legt einen neuen, begrenzten JSON-Bericht an.
+**Öffnen** liest ihn nach einem Neustart wieder ein; **Sammlung** verwaltet
+gespeicherte Fälle unter dem eigenen Benutzerprofil. Es wird dabei kein
+Suchlauf wiederholt. Dateibindung und Fundbereiche werden geprüft, gespeicherte
+PhotoRec-Funddateien zusätzlich vollständig gehasht. Für native Fundbereiche
+erfolgt die erneute SHA-256-Prüfung vor dem Sichern der gewählten Bytes.
+
+Fehlt die Quelle oder wurde sie geändert, bleibt der Bericht lesbar und die
+Rettung wird gesperrt. **Schließen** leert die aktuelle Ansicht. Das Löschen
+aus der Sammlung entfernt ausschließlich diese Metadaten; Abbilder, Funddateien
+und bereits gerettete Kopien werden dadurch nicht gelöscht.
+
+## Hauptrepo und CI
+
+Die Produktquelle liegt bei [IamAngusU/ReTrace](https://github.com/IamAngusU/ReTrace).
+[angusu-de/ReTrace](https://github.com/angusu-de/ReTrace) ist der separate
+CI-Mirror desselben Maintainers. Der Windows-Workflow läuft ausschließlich
+im Mirror. Beide erhalten denselben geprüften Arbeitsstand; der Mirror ist
+kein eigenes Hauptrepo.
+
+ReTrace bleibt eigenständig lauffähig. TraceLedger kann die registrierte native
+App als Wiederherstellungskomponente starten und deren Untersuchungsberichte
+als Belege importieren. Ein importierter Bericht ist eine dokumentierte
+Aussage des Rettungslaufs, keine neue Prüfung der ursprünglichen Datenträger.
 
 ## Grenzen
 
@@ -68,7 +96,8 @@ keinen erfundenen Prozentsatz „geretteter Originaldaten“ aus.
 Integriert: maximal 10.000 Signaturprüfungen, 64 MiB pro vollständigem Kandidaten,
 4 MiB pro Fragment und ein begrenztes aggregiertes Prüfvolumen. PhotoRec:
 standardmäßig 1 Stunde Laufzeit, 10.000 Funddateien, 64 MiB je Fund und 4 GiB
-Gesamtausgabe; die API erlaubt explizite größere Profile. Externe Ausgabegrenzen
+Gesamtausgabe; diese Grenzen lassen sich in der Oberfläche ausdrücklich
+anpassen. Fotos, Dokumente und alle unterstützten Typen sind getrennte Profile. Externe Ausgabegrenzen
 werden beobachtet und können vor dem Prozessstopp kurz überschritten werden.
 Für PhotoRec wird ein neuer, selbst gewählter Arbeitsordner benötigt; er enthält
 Werkzeugkopien, Funddaten und den Bericht. Abbruch löscht diese Daten nicht.

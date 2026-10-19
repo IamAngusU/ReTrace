@@ -1,5 +1,11 @@
 namespace ReTrace.Core;
 
+public static class RecoveryLimits
+{
+    // Shared 64-bit bound for ordinary images, specialist scans and acquisition.
+    public const long MaximumSourceBytes = 16L * 1024 * 1024 * 1024 * 1024;
+}
+
 public sealed record RecoveryProgress(string Stage, long BytesDone, long BytesTotal, int Candidates = 0, string Message = "");
 public sealed record SourceIdentity(string Path, long Length, long LastWriteUtcTicks, string Sha256 = "")
 {
@@ -23,7 +29,7 @@ public sealed record RecoveryCandidate
 public sealed record RecoveryReport
 {
     public string Schema { get; init; } = "retrace.recovery.v1";
-    public string Version { get; init; } = "0.1.0-alpha.1";
+    public string Version { get; init; } = "0.1.0-alpha.2";
     public required SourceIdentity Source { get; init; }
     public string Engine { get; init; } = "native-photo-carver";
     public string Status { get; init; } = "complete_within_profile";
@@ -38,7 +44,7 @@ public sealed record RecoveryOptions
 {
     public long MaximumFileBytes { get; init; } = 64L * 1024 * 1024;
     public int MaximumCandidates { get; init; } = 10000;
-    public long MaximumSourceBytes { get; init; } = 2L * 1024 * 1024 * 1024 * 1024;
+    public long MaximumSourceBytes { get; init; } = RecoveryLimits.MaximumSourceBytes;
     public bool IncludeFragments { get; init; } = true;
     public long MaximumFragmentBytes { get; init; } = 4L * 1024 * 1024;
 }
