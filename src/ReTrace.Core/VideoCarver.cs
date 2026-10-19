@@ -9,6 +9,9 @@ namespace ReTrace.Core;
 public static class VideoCarver
 {
     private const int BlockBytes = 1024 * 1024, MaximumBoxes = 65536, MaximumOffsets = 262144;
+    private static readonly SearchValues<byte> IsoMarkers = SearchValues.Create((ReadOnlySpan<byte>)[(byte)'f', (byte)'m', (byte)'w', (byte)'R']);
+    internal static bool IsLegacyIsoStart(ReadOnlySpan<byte> type) => type.SequenceEqual("moov"u8) || type.SequenceEqual("mdat"u8) || type.SequenceEqual("wide"u8);
+    internal static bool IsIsoStart(ReadOnlySpan<byte> type) => type.SequenceEqual("ftyp"u8) || IsLegacyIsoStart(type);
     private static readonly HashSet<string> VideoBrands = new(StringComparer.Ordinal)
         { "isom", "iso2", "iso3", "iso4", "iso5", "iso6", "iso7", "iso8", "iso9", "mp41", "mp42", "avc1", "hvc1", "hev1", "dash", "MSNV", "M4V ", "M4VH", "M4VP", "F4V ", "qt  " };
     private static readonly HashSet<string> TopBoxes = new(StringComparer.Ordinal)
@@ -34,7 +37,7 @@ public static class VideoCarver
         if (!Read(source, offset, header, end, cancellationToken)) return null;
         Parsed? parsed = header[..4].SequenceEqual("RIFF"u8) && header[8..12].SequenceEqual("AVI "u8)
             ? ParseAvi(source, offset, end, cancellationToken)
-            : header[4..8].SequenceEqual("ftyp"u8) ? ParseIso(source, offset, end, cancellationToken) : null;
+            : IsIsoStart(header[4..8]) ? ParseIso(source, offset, end, cancellationToken) : null;
         if (parsed is null || parsed.Length <= 0) return null;
         string hash = PhotoCarver.HashRange(source, offset, parsed.Length, cancellationToken);
         string id = $"{parsed.Kind}-{offset:x16}-{parsed.Length:x}";
@@ -63,7 +66,7 @@ public static class VideoCarver
         var candidates = new List<RecoveryCandidate>();
         var notes = new List<string>();
         byte[] buffer = ArrayPool<byte>.Shared.Rent(BlockBytes + 16);
-        long scanned = 0, lastSignature = -1, candidateSpans = 0;
+        long scanned = 0, lastSignature = -1, candidateSpans = 0, coveredVideoEnd = -1;
         long budget = Math.Max(256L * 1024 * 1024, identity.Length * 4);
         int carry = 0, signatures = 0;
         string status = "complete_within_profile";
@@ -81,17 +84,24 @@ public static class VideoCarver
                 long start = scanned - carry; scanned += read;
                 for (int at = 0; at <= available - 4; at++)
                 {
-                    int next = buffer.AsSpan(at, available - 3 - at).IndexOfAny((byte)'f', (byte)'R');
+                    int next = buffer.AsSpan(at, available - 3 - at).IndexOfAny(IsoMarkers);
                     if (next < 0) break;
                     at += next;
                     long offset = -1;
-                    if (buffer.AsSpan(at, 4).SequenceEqual("ftyp"u8) && at >= 4) offset = start + at - 4;
+                    bool legacy = IsLegacyIsoStart(buffer.AsSpan(at, 4));
+                    if (IsIsoStart(buffer.AsSpan(at, 4)) && at >= 4) offset = start + at - 4;
                     else if (buffer.AsSpan(at, 4).SequenceEqual("RIFF"u8) && at + 12 <= available && buffer.AsSpan(at + 8, 4).SequenceEqual("AVI "u8)) offset = start + at;
-                    if (offset < 0 || offset <= lastSignature) continue;
+                    if (offset < 0 || offset <= lastSignature || legacy && offset < coveredVideoEnd) continue;
                     lastSignature = offset;
                     if (++signatures > options.MaximumCandidates) { status = "partial_signature_limit"; notes.Add("Video signature validation limit reached; later regions were not inspected."); stopped = true; break; }
                     var candidate = AssessAt(stream, offset, options.MaximumFileBytes, token);
-                    if (candidate is null) continue;
+                    if (candidate is null)
+                    {
+                        if (!legacy && buffer.AsSpan(at, 4).SequenceEqual("ftyp"u8))
+                            coveredVideoEnd = Math.Max(coveredVideoEnd, BrandedExtentEnd(stream, offset, options.MaximumFileBytes, token));
+                        continue;
+                    }
+                    coveredVideoEnd = Math.Max(coveredVideoEnd, offset + candidate.Length);
                     candidateSpans += candidate.Length;
                     if (candidateSpans > budget) { status = "partial_validation_budget"; notes.Add("Overlapping video hashing budget reached; later regions were not inspected."); stopped = true; break; }
                     if (candidate.State == "partial" && !options.IncludeFragments) continue;
@@ -145,24 +155,50 @@ public static class VideoCarver
     }
     private readonly record struct Atom(long Start, long End, int Header, string Type, bool ZeroSize);
 
+    internal static long BrandedExtentEnd(FileStream source, long origin, long maximum, CancellationToken token)
+    {
+        long limit = origin + Math.Min(maximum, source.Length - origin);
+        Atom? first = AtomAt(source, origin, limit, true, token);
+        if (first is null || first.Value.Type != "ftyp" || first.Value.ZeroSize || first.Value.End > limit ||
+            first.Value.End - origin > 4096 || first.Value.End - origin < first.Value.Header + 8 ||
+            ((first.Value.End - origin - first.Value.Header) & 3) != 0) return origin;
+        long end = first.Value.End;
+        for (int count = 0; count < MaximumBoxes && end + 8 <= limit; count++)
+        {
+            token.ThrowIfCancellationRequested();
+            Atom? next = AtomAt(source, end, limit, true, token);
+            if (next is null || !TopBoxes.Contains(next.Value.Type) || next.Value.Type == "ftyp") break;
+            end = Math.Min(next.Value.End, limit);
+            if (next.Value.ZeroSize || next.Value.End > limit) break;
+        }
+        return end;
+    }
+
     private static Parsed? ParseIso(FileStream source, long origin, long limit, CancellationToken token)
     {
         var state = new IsoState();
         Atom? first = AtomAt(source, origin, limit, true, token);
-        if (first is null || first.Value.Type != "ftyp" || first.Value.ZeroSize || first.Value.End > limit || first.Value.End - origin > 4096 || first.Value.End - origin < first.Value.Header + 8) return null;
-        var ftyp = first.Value;
-        long brandBytes = ftyp.End - origin - ftyp.Header;
-        if ((brandBytes & 3) != 0) return null;
-        Span<byte> brand = stackalloc byte[4];
-        Read(source, origin + ftyp.Header, brand, ftyp.End, token);
-        string major = Encoding.ASCII.GetString(brand);
-        if (major is "avif" or "avis" or "mif1" or "msf1" or "heic" or "heix" or "hevc" or "hevx" or "M4A " or "M4B " or "M4P ") return null;
-        bool recognized = VideoBrands.Contains(major);
-        for (long at = origin + ftyp.Header + 8; at + 4 <= ftyp.End; at += 4)
-        { Read(source, at, brand, ftyp.End, token); recognized |= VideoBrands.Contains(Encoding.ASCII.GetString(brand)); }
-        if (!recognized) return null;
-        string kind = major == "qt  " ? "mov" : "mp4";
-        long cursor = ftyp.End, end = ftyp.End;
+        if (first is null || first.Value.Type is not ("ftyp" or "moov" or "mdat" or "wide")) return null;
+        bool legacy = first.Value.Type != "ftyp";
+        string kind = "mov";
+        long cursor = origin, end = origin;
+        if (!legacy)
+        {
+            var ftyp = first.Value;
+            if (ftyp.ZeroSize || ftyp.End > limit || ftyp.End - origin > 4096 || ftyp.End - origin < ftyp.Header + 8) return null;
+            long brandBytes = ftyp.End - origin - ftyp.Header;
+            if ((brandBytes & 3) != 0) return null;
+            Span<byte> brand = stackalloc byte[4];
+            Read(source, origin + ftyp.Header, brand, ftyp.End, token);
+            string major = Encoding.ASCII.GetString(brand);
+            if (major is "avif" or "avis" or "mif1" or "msf1" or "heic" or "heix" or "hevc" or "hevx" or "M4A " or "M4B " or "M4P ") return null;
+            bool recognized = VideoBrands.Contains(major);
+            for (long at = origin + ftyp.Header + 8; at + 4 <= ftyp.End; at += 4)
+            { Read(source, at, brand, ftyp.End, token); recognized |= VideoBrands.Contains(Encoding.ASCII.GetString(brand)); }
+            if (!recognized) return null;
+            kind = major == "qt  " ? "mov" : "mp4";
+            cursor = end = ftyp.End;
+        }
         bool moov = false;
         while (cursor + 8 <= limit)
         {
@@ -188,8 +224,22 @@ public static class VideoCarver
             else if (atom.Type == "moof") state.Fragmented = true;
             end = atom.End; cursor = atom.End;
             if (atom.ZeroSize) break;
+            // With no ftyp delimiter, stop at the first independently bounded group
+            // that supplies the observed tracks. Do not consume a neighboring movie.
+            if (legacy && moov && state.MovieHeader && !state.Damaged && !state.Partial && state.Tracks.Any(x => x.Video) &&
+                state.Tracks.All(x => x.Handler && x.Offsets.Count > 0 && x.Offsets.All(offset =>
+                    offset <= long.MaxValue && InMediaRange((long)offset, state.Data)))) break;
         }
         var videos = state.Tracks.Where(x => x.Video).ToArray();
+        if (legacy)
+        {
+            // An mdat/moov string alone is ambiguous. Require independent nested movie,
+            // video sample-description and addressing evidence before retaining a span.
+            if (!moov || !state.MovieHeader || state.Data.Count == 0 || !videos.Any(x =>
+                x.Header && x.MediaHeader && x.SampleDescription && x.VisualDescription && x.Offsets.Count > 0)) return null;
+            state.Note("Legacy QuickTime-compatible structure without an ftyp atom; exact original brand and any preceding padding are unknown.");
+            state.Note("The retained legacy span stops after the required observed movie/media atoms; following optional metadata and other preceding atoms may be outside this candidate.");
+        }
         if (moov && state.MovieHeader && state.Tracks.Count > 0 && state.Tracks.All(x => x.Handler && !x.Video) && !state.Damaged && !state.Partial) return null;
         if (state.Data.Count == 0 && videos.Length == 0) return null;
         if (!moov || !state.MovieHeader || videos.Length == 0 || state.Data.Count == 0)

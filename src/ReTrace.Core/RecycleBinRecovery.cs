@@ -49,7 +49,7 @@ public sealed record RecycleEntry
 public sealed record RecycleReport
 {
     public string Schema { get; init; } = "retrace.recycle.v1";
-    public string Version { get; init; } = "0.1.0-alpha.4";
+    public string Version { get; init; } = "0.1.0-alpha.5";
     public string Status { get; init; } = "complete_within_profile";
     public string Scope { get; init; } = "current-user-local-drives";
     public DateTimeOffset StartedUtc { get; init; } = DateTimeOffset.UtcNow;

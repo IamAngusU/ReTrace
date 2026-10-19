@@ -22,7 +22,7 @@ public sealed record FolderRecoveryContainer(string Id, RecoveryReport Recovery)
 public sealed record FolderRecoveryReport
 {
     public string Schema { get; init; } = "retrace.folder-search.v1";
-    public string Version { get; init; } = "0.1.0-alpha.4";
+    public string Version { get; init; } = "0.1.0-alpha.5";
     public required string RootPath { get; init; }
     public string Status { get; init; } = "complete_within_profile";
     public int VisitedEntries { get; init; }

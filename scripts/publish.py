@@ -12,7 +12,7 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.1.0-alpha.4"
+VERSION = "0.1.0-alpha.5"
 ASSETS = {
     "testdisk-7.2.win64.zip": (27354549, "e97e203ce77b6b1a3a37d01beccf069dc6c4632b579ffbb82ae739cdda229f38"),
     "testdisk-7.2.tar.bz2": (855781, "f8343be20cb4001c5d91a2e3bcd918398f00ae6d8310894a5a9f2feb813c283f"),

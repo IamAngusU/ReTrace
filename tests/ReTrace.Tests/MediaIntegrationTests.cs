@@ -71,6 +71,29 @@ internal static class MediaIntegrationTests
             bool mismatch = false;
             try { await InvestigationStore.SaveAsync(videos with { Engine = "native-photo-carver" }, Path.Combine(root, "wrong-engine.json")); } catch (IOException) { mismatch = true; }
             Assert(mismatch, "Stored engine profiles cannot silently relabel video ranges as photos.");
+            byte[] legacy = VideoCarverTests.LegacyMov(padding: true);
+            foreach (int offset in new[] { 0, 1048567, 1048570, 1048574, 1048576 })
+            {
+                byte[] mixedLegacy = [..new byte[offset], ..legacy, ..new byte[19], ..png];
+                string legacyPath = Path.Combine(root, "legacy-boundary.img"); File.WriteAllBytes(legacyPath, mixedLegacy);
+                var legacyReport = await MediaCarver.ScanAsync(legacyPath);
+                var legacyCandidate = legacyReport.Candidates.Single(c => c.Kind == "mov");
+                Assert(legacyReport.Candidates.Count == 2 && legacyCandidate.Offset == offset && legacyCandidate.Length == legacy.Length && legacyCandidate.Sha256 == CarverFixtures.Hash(legacy), "Shared scanning finds legacy MOV across block boundaries once while preserving adjacent photos.");
+                Assert(legacyReport.ScannedBytes == mixedLegacy.Length && legacyReport.Source.Sha256 == CarverFixtures.Hash(mixedLegacy), "Legacy random-access validation preserves the one-pass full-source hash.");
+                Assert((await MediaCarver.ScanAsync(legacyPath, types: ["mp4"])).Candidates.Count == 0, "A brandless QuickTime candidate respects MOV-only type classification.");
+            }
+            string legacyContainer = Path.Combine(folder, "legacy-hidden-cache.bin");
+            File.WriteAllBytes(legacyContainer, [..new byte[29], ..legacy]); File.SetAttributes(legacyContainer, FileAttributes.Hidden);
+            var legacyFolderReport = await FolderRecovery.ScanAsync(folder, new() { Types = ["mov"] });
+            var legacyBound = legacyFolderReport.Containers.Single();
+            Assert(legacyBound.Recovery.Candidates.Single().Sha256 == CarverFixtures.Hash(legacy), "Explicit folder recovery finds an unbranded MOV inside a hidden non-video container.");
+            var legacyFolderExport = await FolderRecovery.RestoreAsync(legacyFolderReport, [legacyBound.Id + ":" + legacyBound.Recovery.Candidates[0].Id], Path.Combine(root, "legacy-folder-export"));
+            Assert(legacyFolderExport.Status == "complete" && File.ReadAllBytes(legacyFolderExport.Files.Single().Path).SequenceEqual(legacy), "Legacy folder recovery independently verifies an exact-byte export.");
+            var legacySaved = await InvestigationStore.SaveAsync(legacyBound.Recovery, Path.Combine(root, "legacy.retrace.json"));
+            Assert((await InvestigationStore.LoadAsync(legacySaved.Path)).CanRecover, "The existing native investigation contract reopens legacy MOV without schema changes.");
+            byte[] avifLike = VideoCarverTests.Mp4(); "avif"u8.CopyTo(avifLike.AsSpan(8));
+            string avifPath = Path.Combine(root, "image-brand.img"); File.WriteAllBytes(avifPath, avifLike);
+            Assert((await MediaCarver.ScanAsync(avifPath, types: ["mov", "mp4"])).Candidates.Count == 0, "Shared legacy discovery does not relabel internal media atoms of a rejected image brand as a video.");
         }
         finally { CarverFixtures.Cleanup(root); }
         return assertions;

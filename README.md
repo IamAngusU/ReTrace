@@ -6,7 +6,7 @@ mit Dark-/Lightmode, lokalem Suchkern, mitgeliefertem PhotoRec, begrenzter
 Bildvorschau, Mehrfachauswahl und geprüfter Kopier-Rettung. Kein TraceLedger,
 Python, Konto, Internetdienst oder Kali-Start zur Benutzung erforderlich.
 
-**Aktuelle Vorschauversion: 0.1.0-alpha.4.** Eine gefundene Signatur ist noch keine
+**Aktuelle Vorschauversion: 0.1.0-alpha.5.** Eine gefundene Signatur ist noch keine
 nachgewiesen gelöschte oder vollständige Datei. ReTrace unterscheidet vollständige
 unterstützte Dateistrukturen, teilweise/beschädigte Bilder und ungeprüfte Funde.
 Lesbare Vorschauen sind ein zusätzlicher Decoder-Test, kein Beweis für das
@@ -52,6 +52,16 @@ alle Frames decodierbar oder die ursprünglichen Aufnahmen vollständig sind.
 
 Gespeicherte Video-Untersuchungen lassen sich wie Foto-Untersuchungen wieder
 öffnen, einzeln auswählen, sichern und als Metadaten an TraceLedger übergeben.
+
+Auch ältere QuickTime-MOV-Dateien ohne `ftyp`-Atom werden nativ gesucht; dieses
+Atom ist laut [Apple optional](https://developer.apple.com/documentation/quicktime-file-format/file_type_compatibility_atom).
+Die Suche erkennt einen Beginn mit `moov`, `mdat` oder `wide` nur bei zusammenpassenden
+Movie-, Video-Track-, Sample- und Chunk-Strukturen. Ein isolierter `mdat`-Block
+reicht nicht. Beide Atomreihenfolgen und 32-/64-Bit-Chunk-Adressen werden geprüft.
+Die genaue ursprüngliche Marke, vorangehende Füllbytes und nachfolgende optionale
+Metadaten bleiben bei solchen Funden unbekannt. Innere Atome bereits erkannter
+Videobereiche oder anderer `ftyp`-Container werden nicht als weitere alte MOVs
+ausgegeben; JPEG-/PNG-Funde innerhalb von Medien bleiben separat sichtbar.
 
 **Laufwerk als Abbild sichern** liest ein ausgewähltes Laufwerk in eine neue
 Abbilddatei auf einem anderen erkannten Datenträger. Dafür kann ein ausdrücklicher

@@ -140,3 +140,39 @@ The specialist video preset uses PhotoRec 7.2's actual `mov`, `riff`, `mkv`,
 `asf` and `mpg` format families, verified against its pinned source. Optional
 `mov/mdat` preserves separate media-data fragments. There is no automatic header
 pairing or claim that isolated mdat data forms a playable original recording.
+
+## Legacy QuickTime recovery
+
+The native video/shared-media scanner now also recognizes QuickTime-compatible
+containers without `ftyp`, which Apple's format documentation explicitly makes
+optional. Entry atoms are limited to `moov`, `mdat` and `wide`; real nested movie
+and video-track headers, a visual sample description, chunk addressing and media
+data must agree before a legacy candidate is retained. Bare media atoms, audio
+tracks and handler-like strings are insufficient. Recognized branded-container
+extents suppress duplicate legacy interpretations of their internal atoms,
+including AVIF/HEIF-like inputs rejected by the native video profile.
+
+The full local C# suite passed 405 assertions. New cases cover both atom orders,
+initial wide padding, 32-/64-bit sample addresses, adjacent legacy movies,
+malformed/orphan/audio inputs, truncation, fragment selection/caps, shared scan
+boundaries and full-source hashes, hidden folder containers, exact exports and
+saved-investigation reopening. The existing format, source and export guards
+remain enabled; the report schema did not change.
+
+Four owned one-second 96x64 MJPEG MOV videos were genuinely encoded with FFmpeg
+7.1: movie metadata first and media data first, each with and without initial
+wide padding. Their ftyp atoms were removed and sample offsets rebased, then
+the resulting files were independently decoded. All four were embedded at known
+offsets in a separate 6-MiB image, including read-block boundaries. Native recovery
+and saved-investigation export preserved their exact lengths and SHA-256 values.
+FFmpeg's strict error mode independently decoded all four exported movies and
+an additional hidden-folder export with 12 frames each. A genuinely truncated
+movie remained partial and exported only its exact available bytes; no playback
+claim was made for that candidate. The source image remained unchanged.
+
+These are contiguous legacy spans, not reconstructed fragment chains. A legacy
+candidate stops once the observed movie/media atom group supplies the recorded
+tracks. Preceding unrelated/padding atoms, trailing optional metadata, original
+brand and exact original file completeness are not established. Partial or
+unsupported enclosing video containers can suppress ambiguous inner legacy
+interpretations; the profile remains explicitly non-exhaustive.

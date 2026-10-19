@@ -11,7 +11,7 @@ public static class PhotoCarver
     private const int BlockBytes = 1024 * 1024;
     private static readonly byte[] PngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
     private static readonly uint[] CrcTable = MakeCrcTable();
-    private static readonly SearchValues<byte> MediaMarkers = SearchValues.Create((ReadOnlySpan<byte>)[0x89, 0xff, (byte)'f', (byte)'R']);
+    private static readonly SearchValues<byte> MediaMarkers = SearchValues.Create((ReadOnlySpan<byte>)[0x89, 0xff, (byte)'f', (byte)'m', (byte)'w', (byte)'R']);
 
     public static RecoveryCandidate? AssessFile(string path, string kind, long maximumFileBytes = 64L * 1024 * 1024)
     {
@@ -46,7 +46,7 @@ public static class PhotoCarver
         var diagnostics = new List<string>();
         using var sourceHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         byte[] buffer = ArrayPool<byte>.Shared.Rent(BlockBytes + 16);
-        long scanned = 0, lastSignature = -1;
+        long scanned = 0, lastSignature = -1, coveredVideoEnd = -1;
         long validationSpans = 0;
         long validationBudget = Math.Max(256L * 1024 * 1024, identity.Length * 4);
         int carry = 0, signatures = 0;
@@ -73,11 +73,12 @@ public static class PhotoCarver
                     if (next < 0) break;
                     at += next;
                     byte b = buffer[at];
-                    bool movie = videoProfile && b == (byte)'f' && at >= 4 && buffer.AsSpan(at, 4).SequenceEqual("ftyp"u8);
+                    bool legacyMovie = videoProfile && types!.Contains("mov") && VideoCarver.IsLegacyIsoStart(buffer.AsSpan(at, 4));
+                    bool movie = videoProfile && at >= 4 && (buffer.AsSpan(at, 4).SequenceEqual("ftyp"u8) || legacyMovie);
                     bool avi = videoProfile && types!.Contains("avi") && b == (byte)'R' && at + 12 <= available &&
                         buffer.AsSpan(at, 4).SequenceEqual("RIFF"u8) && buffer.AsSpan(at + 8, 4).SequenceEqual("AVI "u8);
                     long offset = start + at - (movie ? 4 : 0);
-                    if (offset <= lastSignature) continue;
+                    if (offset <= lastSignature || legacyMovie && offset < coveredVideoEnd) continue;
                     bool png = (types is null || types.Contains("png")) && b == 0x89 && buffer.AsSpan(at, 8).SequenceEqual(PngSignature);
                     bool jpeg = (types is null || types.Contains("jpeg")) && b == 0xff && buffer[at + 1] == 0xd8 && buffer[at + 2] == 0xff && IsJpegInitialMarker(buffer[at + 3]);
                     if (!png && !jpeg && !movie && !avi) continue;
@@ -93,7 +94,13 @@ public static class PhotoCarver
                     {
                         // Video assessment uses random access and leaves the streaming source cursor intact.
                         RecoveryCandidate? video = VideoCarver.AssessAt(stream, offset, options.MaximumFileBytes, token);
-                        if (video is null) continue;
+                        if (video is null)
+                        {
+                            if (!legacyMovie && movie) coveredVideoEnd = Math.Max(coveredVideoEnd,
+                                VideoCarver.BrandedExtentEnd(stream, offset, options.MaximumFileBytes, token));
+                            continue;
+                        }
+                        coveredVideoEnd = Math.Max(coveredVideoEnd, offset + video.Length);
                         validationSpans = checked(validationSpans + 2 * video.Length);
                         if (validationSpans > validationBudget)
                         {

@@ -43,6 +43,19 @@ internal static class VideoCarverTests
         return Join(Encoding.ASCII.GetBytes("RIFF"), Le32((uint)body.Length), body);
     }
 
+    internal static byte[] LegacyMov(bool mediaFirst = true, bool padding = false, bool wideOffsets = false)
+    {
+        byte[] modern = Mp4(mov: true, mediaFirst: mediaFirst, wide: wideOffsets);
+        int removed = checked((int)BinaryPrimitives.ReadUInt32BigEndian(modern));
+        byte[] prefix = padding ? Atom("wide") : [];
+        byte[] legacy = Join(prefix, modern[removed..]);
+        int table = Find(legacy, wideOffsets ? "co64" : "stco") + 12;
+        long delta = prefix.Length - removed;
+        if (wideOffsets) BinaryPrimitives.WriteUInt64BigEndian(legacy.AsSpan(table), checked((ulong)((long)BinaryPrimitives.ReadUInt64BigEndian(legacy.AsSpan(table)) + delta)));
+        else BinaryPrimitives.WriteUInt32BigEndian(legacy.AsSpan(table), checked((uint)((long)BinaryPrimitives.ReadUInt32BigEndian(legacy.AsSpan(table)) + delta)));
+        return legacy;
+    }
+
     internal static byte[] Atom(string type, params byte[][] data)
     { byte[] payload = Join(data); return Join(Be32((uint)(8 + payload.Length)), Encoding.ASCII.GetBytes(type), payload); }
     private static byte[] Chunk(string type, byte[] data) => Join(Encoding.ASCII.GetBytes(type), Le32((uint)data.Length), data, data.Length % 2 != 0 ? new byte[1] : []);
@@ -76,6 +89,29 @@ internal static class VideoCarverTests
             Assert((await Scan("wide-offset.img", Mp4(wide: true))).Candidates.Single().State == "complete", "64-bit chunk offsets are read without truncation.");
             Assert((await Scan("extended-mdat.img", Mp4(extendedMedia: true))).Candidates.Single().State == "complete", "Extended-size media atoms retain correct physical bounds.");
             Assert((await Scan("moov-first.img", Mp4(mediaFirst: false))).Candidates.Single().State == "complete", "Fast-start movies validate chunk ranges after walking later media data.");
+            foreach (bool mediaFirst in new[] { true, false })
+                foreach (bool padding in new[] { true, false })
+                    foreach (bool wideOffsets in new[] { true, false })
+                    {
+                        byte[] legacy = LegacyMov(mediaFirst, padding, wideOffsets);
+                        var item = (await Scan($"legacy-{mediaFirst}-{padding}-{wideOffsets}.img", legacy)).Candidates.Single();
+                        Assert(item.Kind == "mov" && item.State == "complete" && item.Offset == 0 && item.Length == legacy.Length && item.Sha256 == CarverFixtures.Hash(legacy), "Legacy QuickTime without ftyp preserves supported atom order, wide padding and 32/64-bit chunk mapping.");
+                        Assert(item.Diagnostics.Any(x => x.Contains("without an ftyp")) && item.DeletionStatus == "unknown", "Legacy recovery explains its evidence and original-boundary uncertainty.");
+                    }
+            byte[] legacyFirst = LegacyMov(), legacySecond = LegacyMov(mediaFirst: false);
+            var legacyPair = await Scan("neighboring-legacy.img", Join(legacyFirst, legacySecond));
+            Assert(legacyPair.Candidates.Count == 2 && legacyPair.Candidates[0].Length == legacyFirst.Length && legacyPair.Candidates[1].Offset == legacyFirst.Length, "Independently bounded neighboring legacy movies are kept separate.");
+            byte[] orphanData = Atom("mdat", Encoding.ASCII.GetBytes("moov trak mdia hdlr vide stco not nested movie structures"));
+            Assert((await Scan("orphan-legacy-data.img", orphanData)).Candidates.Count == 0, "Ambiguous orphan mdat bytes and handler-like strings are not invented into a legacy movie.");
+            byte[] legacyAudio = LegacyMov(); Encoding.ASCII.GetBytes("soun").CopyTo(legacyAudio, Find(legacyAudio, "hdlr") + 12);
+            Assert((await Scan("legacy-audio-only.img", legacyAudio)).Candidates.Count == 0, "A brandless audio-only container does not enter the native video profile.");
+            byte[] legacyBadAddress = LegacyMov(); BinaryPrimitives.WriteUInt32BigEndian(legacyBadAddress.AsSpan(Find(legacyBadAddress, "stco") + 12), uint.MaxValue);
+            Assert((await Scan("legacy-bad-address.img", legacyBadAddress)).Candidates.Single().State == "damaged", "A coherent legacy video with out-of-range sample addresses remains damaged evidence.");
+            byte[] legacyTruncated = LegacyMov(mediaFirst: false)[..^20];
+            Assert((await Scan("legacy-truncated-media.img", legacyTruncated)).Candidates.Single().State == "partial", "Valid legacy metadata with truncated media retains an honest partial span.");
+            Assert((await Scan("legacy-fragments-disabled.img", legacyTruncated, new() { IncludeFragments = false })).Candidates.Count == 0, "Legacy partial candidates honor the fragment option.");
+            var legacyCapped = await Scan("legacy-fragment-cap.img", legacyTruncated, new() { MaximumFragmentBytes = 128 });
+            Assert(legacyCapped.Candidates.Single().Length == 128 && legacyCapped.Candidates[0].Sha256 == CarverFixtures.Hash(legacyTruncated[..128]), "Legacy partial fragment length and SHA-256 remain bound to retained bytes.");
             var zero = await Scan("zero-size.img", Mp4(mediaFirst: false, zeroSizedMedia: true));
             Assert(zero.Candidates.Single().State == "partial" && zero.Candidates[0].Diagnostics.Any(x => x.Contains("size-zero")), "A size-zero extent is retained with an explicit unresolved original file boundary.");
             var encrypted = await Scan("encrypted-description.img", Mp4(encrypted: true));
