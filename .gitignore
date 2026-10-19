@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+dist/
+.tools/
+.validation/
+*.user
+*.img
+*.raw
+*.zip
+*.tar.bz2
