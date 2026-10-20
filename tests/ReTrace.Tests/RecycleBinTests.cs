@@ -167,6 +167,7 @@ internal static class RecycleBinTests
                 Assert(!withLink.Entries.Single(x => x.PayloadName == first.PayloadName).CanRecover, "The corresponding multi-link original is also rejected.");
                 File.Delete(linked);
             }
+            else TestCoverage.Skip("recycle_bin_hardlinks", "The native hard-link payload fixture requires Windows.");
             File.Delete(payloadPath);
             await Reject(() => RecycleBinRecovery.RestoreAsync(report, first.Id, Path.Combine(root, "missing-payload")), "Removed source payloads are rejected before recovery.");
             Assert(!Directory.Exists(Path.Combine(root, "missing-payload")), "A vanished payload creates no output directory.");

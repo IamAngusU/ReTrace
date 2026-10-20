@@ -9,6 +9,7 @@ Build from the selected Git commit on Windows with .NET 10 SDK and Python
 
 ```powershell
 python scripts/source_manifest.py --verify
+python -m unittest discover -s tests -p 'test_*.py'
 python scripts/fetch_components.py .tools
 python scripts/publish.py D:\ReTrace\new-package --assets .tools
 python scripts/release_check.py --package D:\ReTrace\new-package --work-directory D:\ReTrace\new-verification

@@ -1,4 +1,14 @@
-# Validation scope, 2026-10-19
+# Validation history and current review
+
+## Review on 2026-10-20
+
+The current reliability/performance patch was reviewed and tested on Linux.
+Its regressions, measurements, compatibility notes and remaining Windows
+release gates are recorded in [review-2026-10-20.md](review-2026-10-20.md).
+The test runner now reports platform-specific skips explicitly. Historical
+Windows runs below do not validate the changed patch's GUI or native I/O.
+
+## Previous validation records, 2026-10-19
 
 This is an independently runnable alpha.2 preview, not a promise of exhaustive
 recovery or a completed data-recovery certification.

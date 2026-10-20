@@ -183,6 +183,7 @@ Windows 10/11 x64 und .NET-10-SDK; keine NuGet-Abhängigkeiten von Drittanbieter
 
 ```powershell
 dotnet run --project tests/ReTrace.Tests/ReTrace.Tests.csproj -c Release
+python -m unittest discover -s tests -p 'test_*.py'
 dotnet build src/ReTrace.App/ReTrace.App.csproj -c Release
 python scripts/fetch_components.py .tools
 python scripts/publish.py D:\ReTrace\neuer-build --assets .tools
@@ -193,7 +194,14 @@ Originalarchive im Komponentenordner müssen die Pins aus
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) erfüllen. Keine Binärarchive,
 Datenträgerabbilder oder privaten Funddaten gehören in das Git-Repository.
 
-Validierung: [docs/validation.md](docs/validation.md).
+Der Testlauf weist plattformspezifisch ausgelassene Prüfungen ausdrücklich als
+`skipped` aus. Ein Linux-Testlauf ersetzt keine Windows-Dateisperr-, Laufwerks-
+oder GUI-Prüfung. Die optionalen, reproduzierbaren Performance-Messungen stehen
+in [docs/benchmarks.md](docs/benchmarks.md).
+
+Validierung: [docs/validation.md](docs/validation.md). Konkrete Befunde,
+Verbesserungen und Grenzen des Reviews vom 20.10.2026:
+[docs/review-2026-10-20.md](docs/review-2026-10-20.md).
 
 ## Herkunft
 

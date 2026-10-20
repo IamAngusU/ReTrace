@@ -16,6 +16,8 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Test recovery, source guards, output verification and cancellation
         run: dotnet run --project tests/ReTrace.Tests/ReTrace.Tests.csproj -c Release
+      - name: Test release inventory validation
+        run: python -m unittest discover -s tests -p 'test_*.py'
       - name: Verify complete source inventory
         run: python scripts/source_manifest.py --verify
       - name: Build native application

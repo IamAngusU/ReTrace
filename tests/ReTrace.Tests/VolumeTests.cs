@@ -21,6 +21,33 @@ internal static class VolumeTests
         Directory.CreateDirectory(root);
         try
         {
+            string unavailableReceipt = Path.Combine(root, "receipt-directory.img");
+            Directory.CreateDirectory(unavailableReceipt + ".retrace.json");
+            using (var stream = new MemoryStream([1, 2, 3]))
+            {
+                bool rejected = false;
+                try { await VolumeAcquisition.CaptureStreamAsync(stream, 3, "synthetic", unavailableReceipt); }
+                catch (IOException) { rejected = true; }
+                Check(rejected && !File.Exists(unavailableReceipt), "An occupied receipt directory is rejected before any image bytes are written.");
+            }
+            string preCancelled = Path.Combine(root, "pre-cancelled.img");
+            using (var stream = new MemoryStream([1, 2, 3]))
+            using (var cancellation = new CancellationTokenSource())
+            {
+                cancellation.Cancel();
+                bool rejected = false;
+                try { await VolumeAcquisition.CaptureStreamAsync(stream, 3, "synthetic", preCancelled, token: cancellation.Token); }
+                catch (OperationCanceledException) { rejected = true; }
+                Check(rejected && !File.Exists(preCancelled) && !File.Exists(preCancelled + ".retrace.json"), "A pre-cancelled acquisition creates neither an image nor a receipt.");
+            }
+            string unreadable = Path.Combine(root, "unreadable-input.img");
+            using (var stream = new FileStream(Path.Combine(root, "write-only-source"), FileMode.CreateNew, FileAccess.Write))
+            {
+                bool rejected = false;
+                try { await VolumeAcquisition.CaptureStreamAsync(stream, 3, "synthetic", unreadable); }
+                catch (ArgumentException) { rejected = true; }
+                Check(rejected && !File.Exists(unreadable), "An unreadable input is rejected before creating acquisition output.");
+            }
             foreach (var unsafePath in new[] { "relative.img", Path.Combine(root, "image.img:stream") })
             {
                 using var stream = new MemoryStream([1, 2, 3]);
