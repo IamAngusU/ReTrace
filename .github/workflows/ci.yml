@@ -1,0 +1,93 @@
+name: ReTrace Windows
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  build-and-test:
+    if: github.repository == 'angusu-de/ReTrace'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Test recovery, source guards, output verification and cancellation
+        run: dotnet run --project tests/ReTrace.Tests/ReTrace.Tests.csproj -c Release
+      - name: Verify complete source inventory
+        run: python scripts/source_manifest.py --verify
+      - name: Build native application
+        run: dotnet build src/ReTrace.App/ReTrace.App.csproj -c Release --nologo
+      - name: Exercise actual native scan, preview and export
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP 'retrace-synthetic.img'
+          dotnet run --project tests/ReTrace.Tests/ReTrace.Tests.csproj -c Release -- --write-fixture $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Fixture creation failed.' }
+          $proof = Join-Path $env:RUNNER_TEMP 'retrace-native-proof.json'
+          $image = Join-Path $env:RUNNER_TEMP 'retrace-native-preview.png'
+          $executable = Join-Path $PWD 'src/ReTrace.App/bin/Release/net10.0-windows/ReTrace.exe'
+          $arguments = @('--source', ('"' + $fixture + '"'), '--verify-workbench', ('"' + $proof + '"'), '--render-preview', ('"' + $image + '"'))
+          $process = Start-Process -FilePath $executable -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $proof)) { throw 'Native workflow failed.' }
+          $videoFixture = Join-Path $env:RUNNER_TEMP 'retrace-owned-video.img'
+          dotnet run --no-build --project tests/ReTrace.Tests/ReTrace.Tests.csproj -c Release -- --write-video-fixture $videoFixture
+          if ($LASTEXITCODE -ne 0) { throw 'Structural video fixture creation failed.' }
+          $videoProof = Join-Path $env:RUNNER_TEMP 'retrace-video-proof.json'
+          $videoImage = Join-Path $env:RUNNER_TEMP 'retrace-video-preview.png'
+          $videoArguments = @('--source', ('"' + $videoFixture + '"'), '--verify-video-workbench', ('"' + $videoProof + '"'), '--render-preview', ('"' + $videoImage + '"'))
+          $process = Start-Process -FilePath $executable -ArgumentList $videoArguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $videoProof)) { throw 'Native structural video workflow failed.' }
+          $session = Join-Path $env:RUNNER_TEMP 'retrace-session-proof.json'
+          $sessionImage = Join-Path $env:RUNNER_TEMP 'retrace-session-preview.png'
+          $sessionArguments = @('--source', ('"' + $fixture + '"'), '--verify-session-workbench', ('"' + $session + '"'), '--render-preview', ('"' + $sessionImage + '"'))
+          $process = Start-Process -FilePath $executable -ArgumentList $sessionArguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $session)) { throw 'Saved investigation workflow failed.' }
+          $folder = Join-Path $env:RUNNER_TEMP 'retrace-owned-folder'
+          New-Item -ItemType Directory -Path $folder | Out-Null
+          Copy-Item -LiteralPath $fixture -Destination (Join-Path $folder 'hidden-cache.bin')
+          [IO.File]::SetAttributes((Join-Path $folder 'hidden-cache.bin'), [IO.FileAttributes]::Hidden)
+          $folderProof = Join-Path $env:RUNNER_TEMP 'retrace-folder-proof.json'
+          $folderImage = Join-Path $env:RUNNER_TEMP 'retrace-folder-preview.png'
+          $folderArguments = @('--source', ('"' + $folder + '"'), '--verify-folder-workbench', ('"' + $folderProof + '"'), '--render-preview', ('"' + $folderImage + '"'))
+          $process = Start-Process -FilePath $executable -ArgumentList $folderArguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $folderProof)) { throw 'Hidden-container workflow failed.' }
+          $handoffProof = Join-Path $env:RUNNER_TEMP 'retrace-folder-handoff.json'
+          $handoffImage = Join-Path $env:RUNNER_TEMP 'retrace-folder-handoff.png'
+          $handoffArguments = @('--source', ('"' + $folder + '"'), '--verify-source-handoff', ('"' + $handoffProof + '"'), '--render-preview', ('"' + $handoffImage + '"'))
+          $process = Start-Process -FilePath $executable -ArgumentList $handoffArguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $handoffProof)) { throw 'Folder handoff selected the wrong profile or scanned automatically.' }
+          $bin = Join-Path $env:RUNNER_TEMP 'retrace-copied-bin'
+          New-Item -ItemType Directory -Path $bin | Out-Null
+          Copy-Item -LiteralPath $fixture -Destination (Join-Path $bin '$Rci0001.img')
+          $original = (Join-Path $env:RUNNER_TEMP 'owned-deleted-fixture.img') + [char]0
+          $writer = [IO.BinaryWriter]::new([IO.File]::Create((Join-Path $bin '$Ici0001.img')))
+          try {
+            $writer.Write([UInt64]2)
+            $writer.Write([UInt64](Get-Item -LiteralPath $fixture).Length)
+            $writer.Write([Int64][DateTime]::UtcNow.ToFileTimeUtc())
+            $writer.Write([UInt32]$original.Length)
+            $writer.Write([Text.Encoding]::Unicode.GetBytes($original))
+          } finally { $writer.Dispose() }
+          $inventory = dotnet run --no-build --project tests/ReTrace.Tests/ReTrace.Tests.csproj -c Release -- --scan-recycle $bin | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Copied-bin fixture inventory failed.' }
+          $entry = @($inventory.Entries | Where-Object CanRecover)[0]
+          if (!$entry) { throw 'Copied-bin fixture has no recoverable entry.' }
+          $binProof = Join-Path $env:RUNNER_TEMP 'retrace-recycle-proof.json'
+          $binImage = Join-Path $env:RUNNER_TEMP 'retrace-recycle-preview.png'
+          $binArguments = @('--verify-recycle-workbench', ('"' + $binProof + '"'), '--recycle-root', ('"' + $bin + '"'), '--recycle-entry', $entry.Id, '--render-preview', ('"' + $binImage + '"'))
+          $process = Start-Process -FilePath $executable -ArgumentList $binArguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $binProof)) { throw 'Copied-bin verified-copy workflow failed.' }
+      - name: Build and verify the complete offline distribution
+        shell: pwsh
+        run: |
+          python scripts/fetch_components.py .tools
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned component download failed.' }
+          $package = Join-Path $env:RUNNER_TEMP 'retrace-release-package'
+          $proofs = Join-Path $env:RUNNER_TEMP 'retrace-release-verification'
+          python scripts/publish.py $package --assets .tools
+          if ($LASTEXITCODE -ne 0) { throw 'Offline package publication failed.' }
+          python scripts/release_check.py --package $package --work-directory $proofs
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged native release checks failed.' }
