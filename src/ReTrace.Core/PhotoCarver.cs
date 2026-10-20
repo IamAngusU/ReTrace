@@ -40,6 +40,7 @@ public static class PhotoCarver
             throw new ArgumentOutOfRangeException(nameof(options), "Recovery limits are outside the supported profile.");
         using FileStream stream = PathSafety.OpenRead(source);
         bool videoProfile = types?.Any(t => t is "mp4" or "mov" or "avi") == true;
+        bool isoProfile = types?.Any(t => t is "mp4" or "mov") == true;
         SourceIdentity identity = PathSafety.Identity(source, stream);
         if (identity.Length > options.MaximumSourceBytes) throw new IOException("The source image exceeds the configured size limit.");
         var candidates = new List<RecoveryCandidate>();
@@ -74,7 +75,7 @@ public static class PhotoCarver
                     at += next;
                     byte b = buffer[at];
                     bool legacyMovie = videoProfile && types!.Contains("mov") && VideoCarver.IsLegacyIsoStart(buffer.AsSpan(at, 4));
-                    bool movie = videoProfile && at >= 4 && (buffer.AsSpan(at, 4).SequenceEqual("ftyp"u8) || legacyMovie);
+                    bool movie = isoProfile && at >= 4 && (buffer.AsSpan(at, 4).SequenceEqual("ftyp"u8) || legacyMovie);
                     bool avi = videoProfile && types!.Contains("avi") && b == (byte)'R' && at + 12 <= available &&
                         buffer.AsSpan(at, 4).SequenceEqual("RIFF"u8) && buffer.AsSpan(at + 8, 4).SequenceEqual("AVI "u8);
                     long offset = start + at - (movie ? 4 : 0);
@@ -93,7 +94,7 @@ public static class PhotoCarver
                     if (movie || avi)
                     {
                         // Video assessment uses random access and leaves the streaming source cursor intact.
-                        RecoveryCandidate? video = VideoCarver.AssessAt(stream, offset, options.MaximumFileBytes, token);
+                        RecoveryCandidate? video = VideoCarver.AssessStructureAt(stream, offset, options.MaximumFileBytes, token);
                         if (video is null)
                         {
                             if (!legacyMovie && movie) coveredVideoEnd = Math.Max(coveredVideoEnd,
@@ -101,7 +102,7 @@ public static class PhotoCarver
                             continue;
                         }
                         coveredVideoEnd = Math.Max(coveredVideoEnd, offset + video.Length);
-                        validationSpans = checked(validationSpans + 2 * video.Length);
+                        validationSpans = checked(validationSpans + video.Length);
                         if (validationSpans > validationBudget)
                         {
                             diagnostics.Add("Overlapping candidate validation budget reached; later source regions were not examined.");
@@ -111,11 +112,16 @@ public static class PhotoCarver
                         long videoLength = video.State == "partial" ? Math.Min(video.Length, options.MaximumFragmentBytes) : video.Length;
                         if (videoLength != video.Length)
                         {
-                            validationSpans = checked(validationSpans + videoLength);
                             video = video with { Length = videoLength, Id = $"{video.Kind}-{offset:x16}-{videoLength:x}",
-                                Sha256 = HashRange(stream, offset, videoLength, token),
                                 Diagnostics = [..video.Diagnostics, "Partial fragment capped by the recovery profile; bytes were not repaired or padded."] };
                         }
+                        if (videoLength > validationBudget - validationSpans)
+                        {
+                            diagnostics.Add("Overlapping candidate hashing budget reached; later source regions were not examined.");
+                            status = "partial_validation_budget"; stopped = true; break;
+                        }
+                        validationSpans = checked(validationSpans + videoLength);
+                        video = video with { Sha256 = HashRange(stream, offset, videoLength, token) };
                         candidates.Add(video);
                         continue;
                     }
@@ -130,6 +136,11 @@ public static class PhotoCarver
                     }
                     if (!parsed.Plausible || parsed.Length <= 0 || (parsed.State == "partial" && !options.IncludeFragments)) continue;
                     long length = parsed.State == "partial" ? Math.Min(parsed.Length, options.MaximumFragmentBytes) : parsed.Length;
+                    if (length > validationBudget - validationSpans)
+                    {
+                        diagnostics.Add("Overlapping candidate hashing budget reached; later image regions were not examined.");
+                        status = "partial_validation_budget"; stopped = true; break;
+                    }
                     validationSpans = checked(validationSpans + length);
                     var notes = new List<string>(parsed.Diagnostics);
                     if (length < parsed.Length) notes.Add("Partial fragment capped by the recovery profile; bytes were not repaired or padded.");
@@ -174,7 +185,7 @@ public static class PhotoCarver
     private sealed record ParseResult(bool Plausible, long Length, string State, string Validation, List<string> Diagnostics);
     private static ParseResult ParsePng(FileStream source, long offset, long maximum, CancellationToken token)
     {
-        var reader = new SliceReader(source, offset, Math.Min(maximum, source.Length - offset), token);
+        using var reader = new SliceReader(source, offset, Math.Min(maximum, source.Length - offset), token);
         var notes = new List<string>();
         bool plausible = false, idat = false, palette = false, afterIdat = false, damaged = false;
         byte color = 0;
@@ -258,7 +269,7 @@ public static class PhotoCarver
 
     private static ParseResult ParseJpeg(FileStream source, long offset, long maximum, CancellationToken token)
     {
-        var reader = new SliceReader(source, offset, Math.Min(maximum, source.Length - offset), token);
+        using var reader = new SliceReader(source, offset, Math.Min(maximum, source.Length - offset), token);
         bool frame = false, scan = false, entropy = false, inScan = false;
         int markers = 0, pending = -1;
         string reason = "The JPEG stream ends before a valid end-of-image marker.";
@@ -271,10 +282,12 @@ public static class PhotoCarver
                 if (pending >= 0) { marker = pending; pending = -1; }
                 else if (inScan)
                 {
-                    int b;
-                    do { b = reader.Byte(); if (b != 0xff) entropy = true; } while (b != 0xff);
+                    entropy |= reader.SkipTo(0xff);
                     do { marker = reader.Byte(); } while (marker == 0xff);
-                    if (marker == 0 || marker is >= 0xd0 and <= 0xd7) continue;
+                    // FF 00 represents an entropy byte, including when the scan
+                    // contains no other byte values before its end marker.
+                    if (marker == 0) { entropy = true; continue; }
+                    if (marker is >= 0xd0 and <= 0xd7) continue;
                     inScan = false;
                 }
                 else
@@ -340,29 +353,54 @@ public static class PhotoCarver
         finally { ArrayPool<byte>.Shared.Return(buffer); }
     }
 
-    private sealed class SliceReader(FileStream source, long offset, long length, CancellationToken token)
+    private sealed class SliceReader(FileStream source, long offset, long length, CancellationToken token) : IDisposable
     {
-        private readonly byte[] buffer = new byte[65536];
+        private readonly byte[] buffer = ArrayPool<byte>.Shared.Rent(65536);
         private int available, cursor;
         public long Position { get; private set; }
         public long Length => length;
         public long Remaining => length - Position;
         public byte Byte()
         {
-            if (cursor == available)
-            {
-                token.ThrowIfCancellationRequested();
-                if (Remaining <= 0) throw new EndOfStreamException();
-                available = RandomAccess.Read(source.SafeFileHandle, buffer.AsSpan(0, (int)Math.Min(buffer.Length, Remaining)), offset + Position);
-                cursor = 0;
-                if (available == 0) throw new EndOfStreamException();
-            }
+            EnsureBuffered();
             Position++;
             return buffer[cursor++];
         }
+        private void EnsureBuffered()
+        {
+            if (cursor != available) return;
+            token.ThrowIfCancellationRequested();
+            if (Remaining <= 0) throw new EndOfStreamException();
+            available = RandomAccess.Read(source.SafeFileHandle, buffer.AsSpan(0, (int)Math.Min(buffer.Length, Remaining)), offset + Position);
+            cursor = 0;
+            if (available == 0) throw new EndOfStreamException();
+        }
         public void ReadExactly(Span<byte> data)
         {
-            for (int i = 0; i < data.Length; i++) data[i] = Byte();
+            while (!data.IsEmpty)
+            {
+                EnsureBuffered();
+                int count = Math.Min(data.Length, available - cursor);
+                buffer.AsSpan(cursor, count).CopyTo(data);
+                cursor += count; Position += count;
+                data = data[count..];
+            }
+        }
+        // Consumes the marker and reports whether preceding non-marker bytes
+        // were present. Refill boundaries retain cancellation and exact offsets.
+        public bool SkipTo(byte marker)
+        {
+            bool skipped = false;
+            while (true)
+            {
+                EnsureBuffered();
+                ReadOnlySpan<byte> bytes = buffer.AsSpan(cursor, available - cursor);
+                int index = bytes.IndexOf(marker);
+                int count = index < 0 ? bytes.Length : index + 1;
+                cursor += count; Position += count;
+                skipped |= index != 0;
+                if (index >= 0) return skipped;
+            }
         }
         public ushort UInt16() => (ushort)((Byte() << 8) | Byte());
         public uint UInt32() => ((uint)Byte() << 24) | ((uint)Byte() << 16) | ((uint)Byte() << 8) | Byte();
@@ -375,6 +413,7 @@ public static class PhotoCarver
             count -= buffered;
             if (count > 0) { Position += count; cursor = available; }
         }
+        public void Dispose() => ArrayPool<byte>.Shared.Return(buffer);
     }
 
     private static uint UpdateCrc(uint crc, ReadOnlySpan<byte> data)

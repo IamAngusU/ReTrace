@@ -146,6 +146,8 @@ public partial class MainWindow
         "verified_spool_hashes" => "Funddatei-Hashes geprüft",
         "source_unavailable" => "Quelle fehlt · nur Fundliste",
         "source_identity_changed" => "Quelle verändert · nur Fundliste",
+        "stored_output_unavailable" => "Funddateien nicht verfügbar · nur Fundliste",
+        "stored_output_changed" => "Funddateien verändert · nur Fundliste",
         _ => value
     };
 

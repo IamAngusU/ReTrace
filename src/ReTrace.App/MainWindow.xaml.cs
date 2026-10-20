@@ -23,11 +23,12 @@ public partial class MainWindow : Window
     private readonly string[] arguments;
     private readonly ObservableCollection<CandidateRow> visible = [];
     private readonly Stopwatch clock = new();
-    private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromMilliseconds(100) };
+    private readonly SemaphoreSlim previewGate = new(1, 1);
     private RecoveryReport? report;
     private CancellationTokenSource? activeCancellation;
     private CancellationTokenSource? previewCancellation;
-    private RecoveryProgress? lastProgress;
+    private LatestProgress<RecoveryProgress>? progressSnapshot;
     private string outputDirectory = "";
     private bool busy, ready, light, closingRequested, closingAllowed, verifyCancelAfterFirstChunk;
     private long previewGeneration;
@@ -195,7 +196,8 @@ public partial class MainWindow : Window
         if (busy) throw new InvalidOperationException("Warte, bis der laufende Vorgang abgeschlossen ist.");
         busy = true;
         clock.Restart();
-        lastProgress = null;
+        var snapshot = new LatestProgress<RecoveryProgress>();
+        progressSnapshot = snapshot;
         activeCancellation = new CancellationTokenSource();
         long thisJob = ++jobGeneration;
         StatusLabel.Text = label;
@@ -206,14 +208,18 @@ public partial class MainWindow : Window
         timer.Start();
         try
         {
-            var progress = new Progress<RecoveryProgress>(value =>
+            IProgress<RecoveryProgress> progress = snapshot;
+            // The verification command deliberately drives the actual UI cancel action.
+            // Normal jobs retain one snapshot and render at most ten times per second.
+            if (verifyCancelAfterFirstChunk) progress = new Progress<RecoveryProgress>(value =>
             {
                 if (!busy || thisJob != jobGeneration) return;
-                lastProgress = value;
+                snapshot.Report(value);
                 RenderProgress();
                 if (verifyCancelAfterFirstChunk && value.Stage == "scanning" && value.BytesDone > 0 && activeCancellation?.IsCancellationRequested == false) Cancel_Click(this, new RoutedEventArgs());
             });
             await action(progress, activeCancellation.Token);
+            RenderProgress();
         }
         catch (OperationCanceledException)
         {
@@ -223,6 +229,7 @@ public partial class MainWindow : Window
         finally
         {
             timer.Stop();
+            progressSnapshot = null;
             clock.Stop();
             busy = false;
             WorkProgress.IsIndeterminate = false;
@@ -235,7 +242,8 @@ public partial class MainWindow : Window
 
     private void RenderProgress()
     {
-        if (lastProgress is not { } p)
+        if (activeCancellation?.IsCancellationRequested == true) return;
+        if (progressSnapshot?.Latest is not { } p)
         {
             ProgressDetail.Text = $"Vorbereitung · {clock.Elapsed.TotalSeconds:N0} s";
             return;
@@ -417,7 +425,13 @@ public partial class MainWindow : Window
         }
         try
         {
-            var preview = await Task.Run(() => BuildPreview(sourceReport, candidate, token), token);
+            CheckPreviewEligibility(candidate);
+            // WIC decoding cannot be interrupted mid-call. Serialize it so quickly
+            // changing selection cannot allocate/decode many 64 MiB previews at once.
+            await previewGate.WaitAsync(token);
+            BitmapSource preview;
+            try { preview = await Task.Run(() => BuildPreview(sourceReport, candidate, token), token); }
+            finally { previewGate.Release(); }
             if (generation != previewGeneration) return;
             PreviewImage.Source = preview;
             PreviewPlaceholder.Visibility = Visibility.Collapsed;
@@ -431,18 +445,31 @@ public partial class MainWindow : Window
         }
     }
 
-    private static BitmapSource BuildPreview(RecoveryReport sourceReport, RecoveryCandidate candidate, CancellationToken token)
+    private static void CheckPreviewEligibility(RecoveryCandidate candidate)
     {
         if (candidate.Kind.ToLowerInvariant() is not ("jpeg" or "jpg" or "png")) throw new InvalidDataException(IsVideoKind(candidate.Kind) ? "Die sichere Bildvorschau unterstützt JPEG und PNG. Video-Container werden nicht automatisch geöffnet oder abgespielt. Du kannst die vorhandenen Bytes als geprüfte Kopie sichern." : "Die sichere Bildvorschau unterstützt JPEG und PNG. Andere Dateitypen können als unveränderte Kopie gesichert werden.");
         if (candidate.Length <= 0 || candidate.Length > 64L * 1024 * 1024) throw new InvalidDataException("Die Vorschau ist auf Bilddateien bis 64 MiB begrenzt.");
+    }
+
+    private static BitmapSource BuildPreview(RecoveryReport sourceReport, RecoveryCandidate candidate, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        CheckPreviewEligibility(candidate);
         var path = candidate.StoredPath ?? sourceReport.Source.Path;
         using var source = PathSafety.OpenRead(path);
         if (candidate.StoredPath is null) PathSafety.VerifyIdentity(sourceReport.Source, PathSafety.Identity(path, source));
         var offset = candidate.StoredPath is null ? candidate.Offset : 0;
         if (offset < 0 || offset > source.Length || candidate.Length > source.Length - offset) throw new InvalidDataException("Der Fundbereich ist nicht vollständig lesbar.");
         source.Position = offset;
+        token.ThrowIfCancellationRequested();
         var bytes = new byte[checked((int)candidate.Length)];
-        source.ReadExactly(bytes);
+        for (int done = 0; done < bytes.Length;)
+        {
+            token.ThrowIfCancellationRequested();
+            int count = Math.Min(64 * 1024, bytes.Length - done);
+            source.ReadExactly(bytes.AsSpan(done, count));
+            done += count;
+        }
         token.ThrowIfCancellationRequested();
         if (!Convert.ToHexString(SHA256.HashData(bytes)).Equals(candidate.Sha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Die Fundbytes stimmen nicht mehr mit dem Suchbericht überein.");
         using var stream = new MemoryStream(bytes, writable: false);

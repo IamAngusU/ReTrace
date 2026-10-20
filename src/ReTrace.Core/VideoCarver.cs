@@ -28,6 +28,18 @@ public static class VideoCarver
     public static RecoveryCandidate? AssessAt(FileStream source, long offset, long maximumFileBytes,
         CancellationToken cancellationToken = default)
     {
+        RecoveryCandidate? candidate = AssessStructureAt(source, offset, maximumFileBytes, cancellationToken);
+        return candidate is null ? null : candidate with
+        {
+            Sha256 = PhotoCarver.HashRange(source, offset, candidate.Length, cancellationToken)
+        };
+    }
+
+    // Scanners select formats, apply fragment caps and reserve their hash budget
+    // before reading media payloads. These intermediate candidates are never published.
+    internal static RecoveryCandidate? AssessStructureAt(FileStream source, long offset, long maximumFileBytes,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(source);
         if (maximumFileBytes < 128 || maximumFileBytes > 1024L * 1024 * 1024) throw new ArgumentOutOfRangeException(nameof(maximumFileBytes));
         if (offset < 0 || offset > source.Length) throw new ArgumentOutOfRangeException(nameof(offset));
@@ -39,11 +51,10 @@ public static class VideoCarver
             ? ParseAvi(source, offset, end, cancellationToken)
             : IsIsoStart(header[4..8]) ? ParseIso(source, offset, end, cancellationToken) : null;
         if (parsed is null || parsed.Length <= 0) return null;
-        string hash = PhotoCarver.HashRange(source, offset, parsed.Length, cancellationToken);
         string id = $"{parsed.Kind}-{offset:x16}-{parsed.Length:x}";
         return new()
         {
-            Id = id, Kind = parsed.Kind, Offset = offset, Length = parsed.Length, Sha256 = hash,
+            Id = id, Kind = parsed.Kind, Offset = offset, Length = parsed.Length, Sha256 = "",
             State = parsed.State, Name = $"{parsed.Kind}_{offset:x16}.{parsed.Kind}", Diagnostics = parsed.Notes,
             Validation = "Container structure and available byte range checked. Compressed samples, frame decoding, playback and exact original completeness are not established."
         };
@@ -94,7 +105,7 @@ public static class VideoCarver
                     if (offset < 0 || offset <= lastSignature || legacy && offset < coveredVideoEnd) continue;
                     lastSignature = offset;
                     if (++signatures > options.MaximumCandidates) { status = "partial_signature_limit"; notes.Add("Video signature validation limit reached; later regions were not inspected."); stopped = true; break; }
-                    var candidate = AssessAt(stream, offset, options.MaximumFileBytes, token);
+                    var candidate = AssessStructureAt(stream, offset, options.MaximumFileBytes, token);
                     if (candidate is null)
                     {
                         if (!legacy && buffer.AsSpan(at, 4).SequenceEqual("ftyp"u8))
@@ -103,15 +114,20 @@ public static class VideoCarver
                     }
                     coveredVideoEnd = Math.Max(coveredVideoEnd, offset + candidate.Length);
                     candidateSpans += candidate.Length;
-                    if (candidateSpans > budget) { status = "partial_validation_budget"; notes.Add("Overlapping video hashing budget reached; later regions were not inspected."); stopped = true; break; }
+                    if (candidateSpans > budget) { status = "partial_validation_budget"; notes.Add("Overlapping video validation budget reached; later regions were not inspected."); stopped = true; break; }
                     if (candidate.State == "partial" && !options.IncludeFragments) continue;
                     if (candidate.State == "partial" && candidate.Length > options.MaximumFragmentBytes)
                     {
                         long length = options.MaximumFragmentBytes;
                         candidate = candidate with { Length = length, Id = $"{candidate.Kind}-{offset:x16}-{length:x}",
-                            Sha256 = PhotoCarver.HashRange(stream, offset, length, token),
                             Diagnostics = [.. candidate.Diagnostics, "Partial video span capped by the fragment profile. Bytes were not padded or repaired."] };
                     }
+                    if (candidate.Length > budget - candidateSpans)
+                    {
+                        status = "partial_validation_budget"; notes.Add("Overlapping video hashing budget reached; later regions were not inspected."); stopped = true; break;
+                    }
+                    candidateSpans += candidate.Length;
+                    candidate = candidate with { Sha256 = PhotoCarver.HashRange(stream, offset, candidate.Length, token) };
                     candidates.Add(candidate);
                 }
                 progress?.Report(new("scanning", scanned, identity.Length, candidates.Count, "Video container structures; deletion and playability remain unknown."));
@@ -129,11 +145,11 @@ public static class VideoCarver
             Status = status, ScannedBytes = scanned, Candidates = candidates, Diagnostics = notes,
             Limitations =
             [
-                "Only contiguous branded MP4/MOV ISO-BMFF and RIFF AVI are assessed. Legacy unbranded MOV, MKV/WebM, fragmented media addressing and filesystem reconstruction need specialist tools.",
+                "Only supported contiguous MP4/MOV ISO-BMFF, legacy QuickTime and RIFF AVI are assessed. MKV/WebM, fragmented media addressing and filesystem reconstruction need specialist tools.",
                 "Complete means the supported container structures and observed sample-address ranges are bounded, not that frames decode or that the exact original file was recovered.",
                 "ISO-BMFF has no universal file terminator. The recorded span ends at supported bounded top-level boxes; unknown adjacent bytes and a later ftyp start are excluded.",
                 "Source deletion status and authorship remain unknown. Overwritten, encrypted or TRIM-discarded plaintext cannot be invented.",
-                $"Profile: {options.MaximumCandidates} signatures, {options.MaximumFileBytes} bytes per candidate, {options.MaximumFragmentBytes} bytes per partial candidate, {MaximumBoxes} structural boxes and {MaximumOffsets} chunk offsets per assessment; overlapping candidate hash budget {budget} bytes."
+                $"Profile: {options.MaximumCandidates} signatures, {options.MaximumFileBytes} bytes per candidate, {options.MaximumFragmentBytes} bytes per partial candidate, {MaximumBoxes} structural boxes and {MaximumOffsets} chunk offsets per assessment; overlapping candidate validation and hash budget {budget} bytes."
             ]
         };
     }

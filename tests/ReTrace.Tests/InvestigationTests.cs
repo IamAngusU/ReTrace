@@ -27,6 +27,7 @@ internal static class InvestigationTests
             string path = Path.Combine(root, "investigation.json");
             var saved = await InvestigationStore.SaveAsync(report, path);
             Assert(saved.CaseId.StartsWith("case-") && saved.CaseId.Length == 69 && File.Exists(path), "Saved metadata has a stable SHA-256 case identifier.");
+            Assert(saved.CaseId == "case-" + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(report))), "Streaming case-ID hashing preserves the existing compact JSON identity format.");
             Assert(saved.Verification == "not_revalidated", "Saving metadata does not falsely claim fresh byte verification.");
             Assert(JsonNode.Parse(File.ReadAllText(path))!["Schema"]!.GetValue<string>() == InvestigationStore.Schema, "Saved case has a versioned schema.");
             Assert(!Directory.EnumerateFiles(root, "*.pending").Any(), "Atomic save leaves no temporary metadata behind.");
@@ -87,6 +88,20 @@ internal static class InvestigationTests
             string huge = Path.Combine(root, "oversized.json");
             using (var stream = new FileStream(huge, FileMode.CreateNew, FileAccess.Write)) stream.SetLength(InvestigationStore.MaximumFileBytes + 1L);
             await Reject(() => InvestigationStore.LoadAsync(huge), "Large metadata is rejected before being allocated or parsed.");
+            var oversizedReport = report with
+            {
+                Candidates = Enumerable.Range(0, 64).Select(index => candidate with
+                {
+                    Id = "oversized-" + index,
+                    Diagnostics = Enumerable.Repeat(new string('d', 8192), 128).ToList()
+                }).ToList()
+            };
+            string oversizedSave = Path.Combine(root, "oversized-save.json");
+            long saveAllocationStart = GC.GetTotalAllocatedBytes(precise: true);
+            await Reject(() => InvestigationStore.SaveAsync(oversizedReport, oversizedSave), "Oversized in-memory reports stop serialization at the metadata byte budget.");
+            long saveAllocated = GC.GetTotalAllocatedBytes(precise: true) - saveAllocationStart;
+            Assert(saveAllocated < 3L * InvestigationStore.MaximumFileBytes, $"Rejecting oversized metadata must not allocate a complete oversized JSON copy (allocated {saveAllocated} bytes).");
+            Assert(!File.Exists(oversizedSave) && !Directory.EnumerateFiles(root, ".retrace-*.pending").Any(), "Rejected oversized metadata publishes neither a case nor a temporary file.");
             string deep = Path.Combine(root, "deep.json");
             File.WriteAllText(deep, new string('[', 40) + "0" + new string(']', 40));
             await Reject(() => InvestigationStore.LoadAsync(deep), "Excessive JSON nesting is rejected.");
@@ -113,9 +128,15 @@ internal static class InvestigationTests
             await InvestigationStore.DeleteFromLibraryAsync(saved.CaseId, library);
             Assert(!File.Exists(libraryCase.Path) && File.Exists(source), "Explicit metadata removal also handles corrupt cases without deleting source data.");
             await InvestigationStore.SaveToLibraryAsync(report, library);
-            using (var locked = new FileStream(libraryCase.Path, FileMode.Open, FileAccess.Read, FileShare.Read))
-                await Reject(() => InvestigationStore.DeleteFromLibraryAsync(saved.CaseId, library), "An in-use metadata file is not deleted through another reader's lock.");
-            Assert(File.Exists(libraryCase.Path), "Rejected locked metadata removal leaves its case intact.");
+            if (OperatingSystem.IsWindows())
+            {
+                // FileShare.Delete is enforced by Windows. POSIX permits unlinking an open file,
+                // so the local test fallback cannot exercise this native deletion guarantee.
+                using (var locked = new FileStream(libraryCase.Path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    await Reject(() => InvestigationStore.DeleteFromLibraryAsync(saved.CaseId, library), "An in-use metadata file is not deleted through another reader's lock.");
+                Assert(File.Exists(libraryCase.Path), "Rejected locked metadata removal leaves its case intact.");
+            }
+            else TestCoverage.Skip("investigation_delete_sharing", "Windows FileShare.Delete enforcement is unavailable on POSIX filesystems.");
             await InvestigationStore.DeleteFromLibraryAsync(saved.CaseId, library);
             Assert((await InvestigationStore.ListAsync(Path.Combine(root, "missing-library"))).Count == 0, "Listing a missing library does not create directories.");
             Assert(!Directory.Exists(Path.Combine(root, "missing-library")), "Read-only listing never writes to an absent library.");
@@ -125,6 +146,45 @@ internal static class InvestigationTests
             var changed = await InvestigationStore.LoadAsync(path);
             Assert(changed.Verification == "source_identity_changed" && !changed.CanRecover, "Changed source identity preserves findings but disables recovery.");
             File.SetLastWriteTimeUtc(source, new DateTime(originalTime, DateTimeKind.Utc));
+
+            string originalSource = Path.Combine(root, "preserved-source.img");
+            File.Move(source, originalSource);
+            Directory.CreateDirectory(source);
+            try
+            {
+                var unavailable = await InvestigationStore.LoadAsync(path);
+                Assert(unavailable.Verification == "source_unavailable" && !unavailable.CanRecover && unavailable.Report.Candidates.Count == 1,
+                    "Replacing a source with a directory keeps recorded findings readable and blocks recovery.");
+            }
+            finally { Directory.Delete(source); File.Move(originalSource, source); }
+            if (OperatingSystem.IsWindows())
+            {
+                using var lockedSource = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None);
+                var unavailable = await InvestigationStore.LoadAsync(path);
+                Assert(unavailable.Verification == "source_unavailable" && !unavailable.CanRecover && unavailable.CaseId == saved.CaseId,
+                    "A sharing-locked source keeps saved findings readable without enabling recovery.");
+            }
+            else
+            {
+                TestCoverage.Skip("investigation_source_sharing_lock", "Windows source sharing-lock behavior requires Windows.");
+                string retainedLibrary = Path.Combine(root, "retained-cases");
+                await InvestigationStore.SaveToLibraryAsync(report, retainedLibrary);
+                File.Move(source, originalSource);
+                File.CreateSymbolicLink(source, originalSource);
+                try
+                {
+                    var unavailable = await InvestigationStore.LoadAsync(path);
+                    Assert(unavailable.Verification == "source_unavailable" && !unavailable.CanRecover && unavailable.CaseId == saved.CaseId,
+                        "A source replaced with a symlink retains metadata and is never followed for recovery.");
+                    var retained = (await InvestigationStore.ListAsync(retainedLibrary)).Single();
+                    Assert(retained.Verification == "not_revalidated" && retained.CandidateCount == 1,
+                        "Library metadata validation does not dereference changed source bindings.");
+                    string unsafeExport = Path.Combine(root, "unsafe-source-export");
+                    await Reject(() => RecoveryExporter.ExportAsync(unavailable.Report, [candidate.Id], unsafeExport), "Actual recovery still refuses the symlink source.");
+                    Assert(!Directory.Exists(unsafeExport), "An unsafe source leaves no recovery destination.");
+                }
+                finally { File.Delete(source); File.Move(originalSource, source); }
+            }
 
             string spool = Path.Combine(root, "specialist-run");
             string recup = Path.Combine(spool, "recup.1"); Directory.CreateDirectory(recup);
@@ -142,14 +202,66 @@ internal static class InvestigationTests
             string oldPhotoRec = Path.Combine(spool, "recovery-report.json");
             File.WriteAllText(oldPhotoRec, JsonSerializer.Serialize(specialist));
             Assert((await InvestigationStore.LoadAsync(oldPhotoRec)).CaseId == specialistSaved.CaseId, "An existing PhotoRec run report can be reopened directly.");
+            var manyCandidates = new List<RecoveryCandidate>();
+            for (int index = 0; index < 64; index++)
+            {
+                string stored = Path.Combine(recup, $"small-{index:D4}.png");
+                File.WriteAllBytes(stored, png);
+                manyCandidates.Add(specialist.Candidates[0] with { Id = $"photorec-many-{index:D4}", StoredPath = stored });
+            }
+            string manyPath = Path.Combine(root, "many-photorec-investigation.json");
+            await InvestigationStore.SaveAsync(specialist with { Candidates = manyCandidates }, manyPath);
+            long verifyAllocationStart = GC.GetTotalAllocatedBytes(precise: true);
+            var manyOpened = await InvestigationStore.LoadAsync(manyPath);
+            long verifyAllocated = GC.GetTotalAllocatedBytes(precise: true) - verifyAllocationStart;
+            Assert(manyOpened.Verification == "verified_spool_hashes" && manyOpened.CanRecover && manyOpened.Report.Candidates.Count == 64,
+                "Every candidate in a larger saved PhotoRec collection is independently verified.");
+            Assert(verifyAllocated < 16L * 1024 * 1024, $"Small-candidate verification must reuse bounded I/O memory instead of allocating 1 MiB per file (allocated {verifyAllocated} bytes).");
             await Reject(() => InvestigationStore.SaveAsync(specialist, Path.Combine(spool, "nested.json")), "Metadata saving cannot write into the specialist source run.");
             await Reject(() => InvestigationStore.SaveAsync(specialist with { Candidates = [specialist.Candidates[0] with { StoredPath = source }] }, Path.Combine(root, "outside-run.json")), "A specialist path cannot escape its recorded run.");
             await Reject(() => InvestigationStore.SaveAsync(specialist with { Candidates = [specialist.Candidates[0] with { Offset = 0 }] }, Path.Combine(root, "fake-offset.json")), "An invented specialist source offset is rejected.");
             await Reject(() => InvestigationStore.SaveAsync(specialist with { Candidates = [specialist.Candidates[0] with { StoredPath = Path.Combine(spool, "f0001.png") }] }, Path.Combine(root, "loose-spool.json")), "Specialist bytes must remain in the direct PhotoRec recup.N layout.");
 
             byte[] tampered = png.ToArray(); tampered[^1] ^= 1; File.WriteAllBytes(recovered, tampered);
-            await Reject(() => InvestigationStore.LoadAsync(specialistPath), "Changed saved specialist bytes invalidate reopen even if file length is unchanged.");
+            var changedSpecialist = await InvestigationStore.LoadAsync(specialistPath);
+            Assert(changedSpecialist.Verification == "stored_output_changed" && !changedSpecialist.CanRecover && changedSpecialist.CaseId == specialistSaved.CaseId,
+                "Changed saved specialist hashes retain the investigation and disable recovery even if file length is unchanged.");
+            var changedSpecialistExport = await RecoveryExporter.ExportAsync(changedSpecialist.Report, [specialist.Candidates[0].Id], Path.Combine(root, "changed-specialist-export"));
+            Assert(changedSpecialistExport.Status == "failed_partial" && changedSpecialistExport.Files.Count == 0,
+                "The exporter independently refuses changed specialist hashes even if a caller ignores CanRecover.");
             File.WriteAllBytes(recovered, png);
+            string disconnectedOutput = Path.Combine(root, "disconnected-output.png");
+            File.Move(recovered, disconnectedOutput);
+            try
+            {
+                var unavailable = await InvestigationStore.LoadAsync(specialistPath);
+                Assert(unavailable.Verification == "stored_output_unavailable" && !unavailable.CanRecover && unavailable.Report.Candidates.Count == 1,
+                    "A missing saved PhotoRec member retains recorded findings without enabling recovery.");
+                string missingExport = Path.Combine(root, "missing-specialist-export");
+                await Reject(() => RecoveryExporter.ExportAsync(unavailable.Report, [specialist.Candidates[0].Id], missingExport),
+                    "The exporter independently rejects missing specialist data.");
+                Assert(!Directory.Exists(missingExport), "Missing specialist data creates no recovery destination.");
+            }
+            finally { File.Move(disconnectedOutput, recovered); }
+            if (!OperatingSystem.IsWindows())
+            {
+                string originalSpool = Path.Combine(root, "preserved-specialist-run");
+                Directory.Move(spool, originalSpool);
+                Directory.CreateSymbolicLink(spool, originalSpool);
+                try
+                {
+                    var unavailable = await InvestigationStore.LoadAsync(specialistPath);
+                    Assert(unavailable.Verification == "stored_output_unavailable" && !unavailable.CanRecover && unavailable.CaseId == specialistSaved.CaseId,
+                        "A linked specialist spool is not followed, while its saved investigation remains readable.");
+                    string linkedExport = Path.Combine(root, "linked-specialist-export");
+                    await Reject(() => RecoveryExporter.ExportAsync(unavailable.Report, [specialist.Candidates[0].Id], linkedExport),
+                        "The exporter independently rejects linked specialist storage.");
+                    Assert(!Directory.Exists(linkedExport), "Linked specialist data creates no recovery destination.");
+                }
+                finally { Directory.Delete(spool); Directory.Move(originalSpool, spool); }
+            }
+            else TestCoverage.Skip("investigation_posix_source_links", "POSIX symlink fixtures run on Linux; Windows reparse coverage uses the junction fixture.");
+            Assert((await InvestigationStore.LoadAsync(specialistPath)).CanRecover, "Restoring unchanged specialist bytes enables recovery again after a fresh verification.");
             await InvestigationStore.SaveToLibraryAsync(specialist, library);
             await InvestigationStore.DeleteFromLibraryAsync(specialistSaved.CaseId, library);
             Assert(File.Exists(recovered) && File.Exists(oldPhotoRec), "Deleting library metadata preserves PhotoRec candidate bytes and its original report.");
@@ -178,6 +290,17 @@ internal static class InvestigationTests
             catch (OperationCanceledException) { writingCancelled = true; }
             Assert(writingCancelled && !File.Exists(duringSavePath), "Cancellation during metadata writing never publishes an incomplete case.");
             Assert(!Directory.EnumerateFiles(root, ".retrace-*.pending").Any(), "Interrupted metadata writing removes only its own private temporary file.");
+            using var duringSmallSave = new CancellationTokenSource();
+            string smallSavePath = Path.Combine(root, "cancelled-small-write.json");
+            bool smallWritingCancelled = false;
+            try
+            {
+                await InvestigationStore.SaveAsync(report, smallSavePath,
+                    new CarverTests.InlineProgress(value => { if (value.Stage == "saving_investigation") duringSmallSave.Cancel(); }), duringSmallSave.Token);
+            }
+            catch (OperationCanceledException) { smallWritingCancelled = true; }
+            Assert(smallWritingCancelled && !File.Exists(smallSavePath) && !Directory.EnumerateFiles(root, ".retrace-*.pending").Any(),
+                "Cancellation after a small metadata write also removes its owned temporary file after buffered-write cleanup.");
             bool loadCancelled = false;
             using var duringLoad = new CancellationTokenSource();
             try { await InvestigationStore.LoadAsync(specialistPath, new CarverTests.InlineProgress(_ => duringLoad.Cancel()), duringLoad.Token); }
@@ -208,8 +331,11 @@ internal static class InvestigationTests
                         }
                         finally { Directory.Delete(alias); }
                     }
+                    else TestCoverage.Skip("investigation_junctions", $"The native junction fixture could not be created (mklink exit {process.ExitCode}).");
                 }
+                else TestCoverage.Skip("investigation_junctions", "The native junction fixture process could not be started.");
             }
+            else TestCoverage.Skip("investigation_junctions", "Native Windows directory junctions are unavailable on this platform.");
         }
         finally { CarverFixtures.Cleanup(root); }
         return assertions;

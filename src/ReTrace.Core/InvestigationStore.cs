@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Security.Cryptography;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
@@ -61,10 +62,12 @@ public static class InvestigationStore
         string destination = RequireNewFile(path);
         if (SamePath(destination, report.Source.Path) || report.RunDirectory is not null && IsWithin(destination, report.RunDirectory))
             throw new IOException("Save investigation metadata outside the original source and specialist run.");
-        string caseId = CaseIdFor(report);
+        string caseId = CaseIdFor(report, cancellationToken);
         var savedUtc = DateTimeOffset.UtcNow;
-        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(new StoredCase(Schema, caseId, savedUtc, report), JsonOptions);
-        if (bytes.Length > MaximumFileBytes) throw new IOException("The saved investigation exceeds the 16 MiB metadata limit.");
+        using var serialized = new MemoryStream();
+        using (var bounded = new MetadataWriteStream(serialized, cancellationToken))
+            JsonSerializer.Serialize(bounded, new StoredCase(Schema, caseId, savedUtc, report), JsonOptions);
+        ReadOnlyMemory<byte> bytes = serialized.GetBuffer().AsMemory(0, checked((int)serialized.Length));
         string parent = System.IO.Path.GetDirectoryName(destination)!;
         string temporary = System.IO.Path.Combine(parent, ".retrace-" + Guid.NewGuid().ToString("N") + ".pending");
         SourceIdentity? temporaryIdentity = null;
@@ -73,20 +76,30 @@ public static class InvestigationStore
         {
             PathSafety.CheckPath(parent);
             await using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.ReadWrite,
-                FileShare.None, 65536, FileOptions.Asynchronous))
+                FileShare.None, 1, FileOptions.Asynchronous))
             {
+                // Writes are already explicitly chunked. Avoid a second FileStream buffer that
+                // would defer small writes until disposal, after cleanup identity was recorded.
                 temporaryIdentity = PathSafety.Identity(temporary, stream);
-                for (int at = 0; at < bytes.Length;)
+                try
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    int count = Math.Min(65536, bytes.Length - at);
-                    await stream.WriteAsync(bytes.AsMemory(at, count), cancellationToken);
-                    at += count;
-                    progress?.Report(new("saving_investigation", at, bytes.Length, report.Candidates.Count, "Saving investigation metadata to a new file."));
+                    for (int at = 0; at < bytes.Length;)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        int count = Math.Min(65536, bytes.Length - at);
+                        await stream.WriteAsync(bytes.Slice(at, count), cancellationToken);
+                        at += count;
+                        progress?.Report(new("saving_investigation", at, bytes.Length, report.Candidates.Count, "Saving investigation metadata to a new file."));
+                    }
+                    await stream.FlushAsync(cancellationToken);
+                    stream.Flush(true);
                 }
-                await stream.FlushAsync(cancellationToken);
-                stream.Flush(true);
-                temporaryIdentity = PathSafety.Identity(temporary, stream);
+                finally
+                {
+                    // Capture legitimate partial-write length/time while the owned stream is
+                    // still open; cancellation must not compare cleanup against an empty file.
+                    temporaryIdentity = PathSafety.Identity(temporary, stream);
+                }
             }
             cancellationToken.ThrowIfCancellationRequested();
             PathSafety.CheckPath(parent);
@@ -137,12 +150,13 @@ public static class InvestigationStore
         cancellationToken.ThrowIfCancellationRequested();
         ValidateReport(report);
         string directory = LibraryDirectory(libraryDirectory, create: true);
-        string path = System.IO.Path.Combine(directory, CaseIdFor(report) + Suffix);
+        string caseId = CaseIdFor(report, cancellationToken);
+        string path = System.IO.Path.Combine(directory, caseId + Suffix);
         if (File.Exists(path))
         {
             // Identical report content has a stable case ID: a second save does not overwrite it.
             var existing = await ReadAsync(path, cancellationToken);
-            if (existing.CaseId != CaseIdFor(report)) throw new IOException("An existing library entry has conflicting metadata.");
+            if (existing.CaseId != caseId) throw new IOException("An existing library entry has conflicting metadata.");
             return existing;
         }
         if (Directory.EnumerateFiles(directory, "case-*" + Suffix, SearchOption.TopDirectoryOnly).Take(MaximumLibraryCases).Count() >= MaximumLibraryCases)
@@ -156,7 +170,7 @@ public static class InvestigationStore
         var investigation = await ReadAsync(path, cancellationToken);
         var report = investigation.Report;
         cancellationToken.ThrowIfCancellationRequested();
-            if (report.Engine is "native-photo-carver" or "native-video-carver" or "native-media-carver")
+        if (report.Engine is "native-photo-carver" or "native-video-carver" or "native-media-carver")
         {
             try
             {
@@ -178,38 +192,61 @@ public static class InvestigationStore
                     Warnings = ["Source size, timestamp and recorded file ID were checked. The whole image and candidate hashes were not read again; selected bytes are verified before recovery."]
                 };
             }
-            catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
                 return investigation with
                 {
                     Verification = "source_unavailable", CanRecover = false,
-                    Warnings = ["The original image is unavailable. Saved findings remain readable; reconnect the unchanged image and reopen before recovery."]
+                    Warnings = ["The original image is unavailable or cannot be opened safely. Saved findings remain readable; reconnect the unchanged ordinary image, release conflicting access, and reopen before recovery."]
                 };
             }
         }
 
         long total = 0, done = 0;
         foreach (var candidate in report.Candidates) total = checked(total + candidate.Length);
-        foreach (var candidate in report.Candidates)
+        InvestigationCase Unavailable(string verification, string candidateId, string reason) => investigation with
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            using var stored = PathSafety.OpenRead(candidate.StoredPath!);
-            var identity = PathSafety.Identity(candidate.StoredPath!, stored);
-            if (stored.Length != candidate.Length) throw new IOException("A saved specialist output changed length: " + candidate.Id);
-            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            byte[] buffer = new byte[1024 * 1024];
-            int read;
-            while ((read = await stored.ReadAsync(buffer, cancellationToken)) != 0)
+            Verification = verification, CanRecover = false,
+            Warnings = [$"Saved specialist candidate {candidateId} {reason}. Recorded findings remain readable, but recovery is disabled until every saved output can be verified.",
+                "The original image was not reopened or revalidated. No replacement candidate bytes were accepted."]
+        };
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(1024 * 1024);
+        try
+        {
+            foreach (var candidate in report.Candidates)
             {
-                hash.AppendData(buffer, 0, read);
-                done += read;
-                progress?.Report(new("verifying_saved_output", done, total, report.Candidates.Count,
-                    "Checking saved specialist candidate bytes; the original image is not reopened."));
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    using var stored = PathSafety.OpenRead(candidate.StoredPath!);
+                    var identity = PathSafety.Identity(candidate.StoredPath!, stored);
+                    if (stored.Length != candidate.Length)
+                        return Unavailable("stored_output_changed", candidate.Id, "changed length");
+                    using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                    long checkedBytes = 0;
+                    while (checkedBytes < candidate.Length)
+                    {
+                        int wanted = (int)Math.Min(buffer.Length, candidate.Length - checkedBytes);
+                        // Direct handle reads also avoid allocating FileStream's 1 MiB private
+                        // buffer for every small candidate in a large saved PhotoRec collection.
+                        int read = await RandomAccess.ReadAsync(stored.SafeFileHandle, buffer.AsMemory(0, wanted), checkedBytes, cancellationToken);
+                        if (read == 0) return Unavailable("stored_output_changed", candidate.Id, "ended before its recorded length");
+                        hash.AppendData(buffer, 0, read);
+                        checkedBytes += read;
+                        done += read;
+                        progress?.Report(new("verifying_saved_output", done, total, report.Candidates.Count,
+                            "Checking saved specialist candidate bytes; the original image is not reopened."));
+                    }
+                    if (!Convert.ToHexString(hash.GetHashAndReset()).Equals(candidate.Sha256, StringComparison.OrdinalIgnoreCase))
+                        return Unavailable("stored_output_changed", candidate.Id, "failed SHA-256 verification");
+                    try { PathSafety.VerifyIdentity(identity, PathSafety.Identity(candidate.StoredPath!, stored)); }
+                    catch (IOException) { return Unavailable("stored_output_changed", candidate.Id, "changed during verification"); }
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                { return Unavailable("stored_output_unavailable", candidate.Id, "is unavailable or cannot be opened safely"); }
             }
-            if (!Convert.ToHexString(hash.GetHashAndReset()).Equals(candidate.Sha256, StringComparison.OrdinalIgnoreCase))
-                throw new IOException("A saved specialist output failed SHA-256 verification: " + candidate.Id);
-            PathSafety.VerifyIdentity(identity, PathSafety.Identity(candidate.StoredPath!, stored));
         }
+        finally { ArrayPool<byte>.Shared.Return(buffer); }
         cancellationToken.ThrowIfCancellationRequested();
         return investigation with
         {
@@ -326,7 +363,7 @@ public static class InvestigationStore
             }
             else throw new IOException("Unsupported investigation or recovery report schema.");
             ValidateReport(report);
-            string id = CaseIdFor(report);
+            string id = CaseIdFor(report, cancellationToken);
             if (recordedId is not null && id != recordedId) throw new IOException("Investigation metadata no longer matches its case ID.");
             return new(id, report, "not_revalidated", savedUtc, full);
         }
@@ -361,7 +398,7 @@ public static class InvestigationStore
         Text(report.Version, 64); Text(report.Status, 64); Text(report.Source.FileId, 128, empty: true);
         Hash(report.Source.Sha256, empty: true);
         Text(report.Source.Path, 32760);
-        string source = PathSafety.CheckPath(report.Source.Path, mustExist: false);
+        string source = PathSafety.NormalizeLocalPath(report.Source.Path);
         if (!SamePath(source, report.Source.Path)) throw new IOException("The source path must be absolute and normalized.");
         Strings(report.Diagnostics, 256); Strings(report.Limitations, 128);
         bool native = report.Engine != "photorec-7.2-windows";
@@ -370,7 +407,7 @@ public static class InvestigationStore
         if (report.RunDirectory is not null)
         {
             Text(report.RunDirectory, 32760);
-            string run = PathSafety.CheckPath(report.RunDirectory, mustExist: false);
+            string run = PathSafety.NormalizeLocalPath(report.RunDirectory);
             if (!SamePath(run, report.RunDirectory) || SamePath(run, System.IO.Path.GetPathRoot(run)!))
                 throw new IOException("A specialist run must be a normalized local subdirectory.");
             if (IsWithin(source, run)) throw new IOException("The original source image cannot be inside the specialist output run.");
@@ -401,7 +438,7 @@ public static class InvestigationStore
                 if (candidate.StoredPath is null || candidate.Mapping != "external_reconstruction" || candidate.Offset != -1)
                     throw new IOException("A specialist candidate must have an external reconstruction and no invented source offset.");
                 Text(candidate.StoredPath, 32760);
-                string stored = PathSafety.CheckPath(candidate.StoredPath, mustExist: false);
+                string stored = PathSafety.NormalizeLocalPath(candidate.StoredPath);
                 if (!SamePath(stored, candidate.StoredPath) || !IsWithin(stored, report.RunDirectory!) || !storedPaths.Add(stored))
                     throw new IOException("A specialist candidate is outside its run or has a duplicate output path.");
                 string parent = System.IO.Path.GetDirectoryName(stored)!;
@@ -453,8 +490,40 @@ public static class InvestigationStore
             throw new IOException("An exact SHA-256 byte binding is required.");
     }
 
-    private static string CaseIdFor(RecoveryReport report)
-        => "case-" + Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(report)));
+    private static string CaseIdFor(RecoveryReport report, CancellationToken cancellationToken = default)
+    {
+        // Keep the exact existing compact JSON case-ID format without allocating another full
+        // report. A report exceeding this budget cannot fit the 16 MiB saved envelope either.
+        using var hash = SHA256.Create();
+        using var hashing = new CryptoStream(Stream.Null, hash, CryptoStreamMode.Write, leaveOpen: true);
+        using (var bounded = new MetadataWriteStream(hashing, cancellationToken))
+            JsonSerializer.Serialize(bounded, report);
+        hashing.FlushFinalBlock();
+        return "case-" + Convert.ToHexStringLower(hash.Hash!);
+    }
+
+    private sealed class MetadataWriteStream(Stream destination, CancellationToken cancellationToken) : Stream
+    {
+        private long written;
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => written;
+        public override long Position { get => written; set => throw new NotSupportedException(); }
+        public override void Flush() => destination.Flush();
+        public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (buffer.Length > MaximumFileBytes - written)
+                throw new IOException("The saved investigation exceeds the 16 MiB metadata limit.");
+            destination.Write(buffer);
+            written += buffer.Length;
+        }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+    }
 
     private static bool ValidCaseId(string? id)
         => id is not null && id.Length == 69 && id.StartsWith("case-", StringComparison.Ordinal) &&

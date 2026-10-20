@@ -68,6 +68,12 @@ internal static class MediaIntegrationTests
             File.WriteAllBytes(riff, [.."RIFF\x04\0\0\0WAVE"u8.ToArray(), ..new byte[31], ..avi]);
             var scopedRiff = await MediaCarver.ScanAsync(riff, new() { MaximumCandidates = 1 }, types: ["avi"]);
             Assert(scopedRiff.Status == "complete_within_profile" && scopedRiff.Candidates.Single().Sha256 == CarverFixtures.Hash(avi), "RIFF audio does not consume an AVI-only signature quota.");
+            string isoBeforeAvi = Path.Combine(root, "iso-before-avi.img");
+            File.WriteAllBytes(isoBeforeAvi, [..video, ..new byte[31], ..avi]);
+            var scopedAvi = await MediaCarver.ScanAsync(isoBeforeAvi, new() { MaximumCandidates = 1 }, types: ["avi"]);
+            Assert(scopedAvi.Status == "complete_within_profile" && scopedAvi.Candidates.Single().Kind == "avi" &&
+                scopedAvi.Candidates[0].Sha256 == CarverFixtures.Hash(avi),
+                "Unselected ISO videos do not consume an AVI-only signature quota before the selected AVI is reached.");
             bool mismatch = false;
             try { await InvestigationStore.SaveAsync(videos with { Engine = "native-photo-carver" }, Path.Combine(root, "wrong-engine.json")); } catch (IOException) { mismatch = true; }
             Assert(mismatch, "Stored engine profiles cannot silently relabel video ranges as photos.");

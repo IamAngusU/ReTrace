@@ -9,11 +9,7 @@ public static class PathSafety
 {
     public static string CheckPath(string path, bool mustExist = true)
     {
-        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
-            throw new IOException("An absolute local path is required.");
-        if (path.StartsWith(@"\\", StringComparison.Ordinal) || path.StartsWith("//", StringComparison.Ordinal) || path.IndexOf(':', 2) >= 0)
-            throw new IOException("Network paths, device paths and alternate data streams are not accepted.");
-        string full = Path.GetFullPath(path);
+        string full = NormalizeLocalPath(path);
         string? current = full;
         while (!string.IsNullOrEmpty(current))
         {
@@ -30,6 +26,18 @@ public static class PathSafety
         if (mustExist && !File.Exists(full) && !Directory.Exists(full))
             throw new FileNotFoundException("The source does not exist.", full);
         return full;
+    }
+
+    // Persisted bindings are metadata: validate their shape without touching a source that may
+    // now be disconnected or unsafe. Every actual read/write still goes through CheckPath.
+    internal static string NormalizeLocalPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
+            throw new IOException("An absolute local path is required.");
+        if (path.StartsWith(@"\\", StringComparison.Ordinal) || path.StartsWith("//", StringComparison.Ordinal) ||
+            path.AsSpan(Math.Min(2, path.Length)).Contains(':'))
+            throw new IOException("Network paths, device paths and alternate data streams are not accepted.");
+        return Path.GetFullPath(path);
     }
 
     public static string RequireNewDirectory(string destination)

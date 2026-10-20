@@ -11,6 +11,8 @@ internal static class ExportTests
         Directory.CreateDirectory(root);
         try
         {
+            string volumeRoot = Path.GetPathRoot(root)!;
+            Assert(PathSafety.CheckPath(volumeRoot) == volumeRoot, "An ordinary filesystem root passes ancestor validation, including the one-character POSIX root.");
             byte[] png = CarverFixtures.Png();
             string source = Path.Combine(root, "source.img"); File.WriteAllBytes(source, [0, 0, 0, ..png, 0, 0, 0]);
             var report = PhotoCarver.ScanAsync(source).GetAwaiter().GetResult();

@@ -24,7 +24,8 @@ internal static class CarverTests
             Assert(exact.Candidates[0].Offset == 0 && exact.Candidates[0].Length == png.Length, "PNG exact byte span.");
             Assert(exact.Candidates[0].Sha256 == CarverFixtures.Hash(png) && exact.Source.Sha256 == CarverFixtures.Hash(png), "PNG and full-source SHA-256.");
             Assert(!exact.Exhaustive && exact.Candidates[0].DeletionStatus == "unknown", "Carving cannot assert deletion or exhaustive recovery.");
-            Assert(exact.Source.FileId.Length > 0 || !OperatingSystem.IsWindows(), "Stable Windows source file ID.");
+            if (OperatingSystem.IsWindows()) Assert(exact.Source.FileId.Length > 0, "Stable Windows source file ID.");
+            else TestCoverage.Skip("carver_file_identity", "Native Windows source file IDs are unavailable on this platform.");
 
             byte[] damaged = (byte[])png.Clone(); damaged[^1] ^= 1;
             var badCrc = Scan(Save("bad-crc.img", damaged));
@@ -46,6 +47,33 @@ internal static class CarverTests
             Assert(jpg.Candidates[0].Length == jpeg.Length, "JPEG ends at EOI.");
             Assert(Scan(Save("jpeg-partial.img", jpeg[..^2])).Candidates.Single().State == "partial", "JPEG with missing EOI remains partial.");
             Assert(Scan(Save("jpeg-false.img", [255, 216, 255, 224, 0, 4, 65, 65, 255, 217])).Candidates.Count == 0, "SOI and APP alone do not qualify as JPEG.");
+
+            byte[] stuffed = [..jpeg[..31], 255, 0, 255, 217];
+            var stuffedReport = Scan(Save("stuffed-entropy.img", stuffed));
+            Assert(stuffedReport.Candidates.Single().State == "complete" && stuffedReport.Candidates[0].Length == stuffed.Length,
+                "Stuffed FF 00 bytes count as JPEG entropy even when no other entropy byte value is present.");
+            Assert(stuffedReport.Candidates[0].Sha256 == CarverFixtures.Hash(stuffed), "Stuffed entropy retains exact original bytes.");
+            byte[] markerBoundary = new byte[2 * 65536 + 1]; jpeg[..31].CopyTo(markerBoundary, 0);
+            markerBoundary[65535] = 255; markerBoundary[65536] = 0;
+            markerBoundary[^2] = 255; markerBoundary[^1] = 217;
+            var bufferedJpeg = Scan(Save("jpeg-reader-boundary.img", markerBoundary));
+            Assert(bufferedJpeg.Candidates.Single().State == "complete" && bufferedJpeg.Candidates[0].Length == markerBoundary.Length &&
+                bufferedJpeg.Candidates[0].Sha256 == CarverFixtures.Hash(markerBoundary),
+                "Stuffed bytes and end markers crossing parser refill boundaries preserve JPEG structure and hashes.");
+            Assert(Scan(Save("jpeg-reader-eof.img", markerBoundary[..^1])).Candidates.Single().State == "partial",
+                "A marker truncated at a parser refill boundary remains partial.");
+            byte[] skippedHeader = [255, 216, 255, 224, 255, 255, ..new byte[65533], ..jpeg[8..]];
+            Assert(Scan(Save("jpeg-skipped-header.img", skippedHeader)).Candidates.Single().Length == skippedHeader.Length,
+                "Skipping a large APP segment across the reader buffer does not skip the next JPEG frame.");
+
+            byte[] bufferedPng = CarverFixtures.LargePng();
+            var bufferedPngReport = Scan(Save("png-reader-boundary.img", bufferedPng));
+            Assert(bufferedPngReport.Candidates.Single().State == "complete" && bufferedPngReport.Candidates[0].Sha256 == CarverFixtures.Hash(bufferedPng),
+                "PNG payload copies across multiple parser buffers preserve chunk CRCs and exact hashes.");
+            var boundedPngReport = Scan(Save("png-reader-limit.img", bufferedPng), new() { MaximumFileBytes = 65536 });
+            Assert(boundedPngReport.Candidates.Single().State == "partial" && boundedPngReport.Candidates[0].Length == 65536 &&
+                boundedPngReport.Candidates[0].Sha256 == CarverFixtures.Hash(bufferedPng[..65536]),
+                "A buffered PNG read cannot escape the per-candidate extent at a refill boundary.");
 
             byte[] boundary = new byte[2 * 1024 * 1024 + 512];
             png.CopyTo(boundary, 1024 * 1024 - 4);
@@ -78,7 +106,8 @@ internal static class CarverTests
                 try { using var writer = new FileStream(locked, FileMode.Open, FileAccess.Write, FileShare.ReadWrite); }
                 catch (IOException) { denied = true; }
             }));
-            Assert(denied || !OperatingSystem.IsWindows(), "Active image scan denies concurrent writers on Windows.");
+            if (OperatingSystem.IsWindows()) Assert(denied, "Active image scan denies concurrent writers on Windows.");
+            else TestCoverage.Skip("carver_source_write_sharing", "Mandatory FileShare write exclusion requires Windows.");
             bool invalidOptions = false;
             try { Scan(locked, new() { MaximumCandidates = 0 }); } catch (ArgumentOutOfRangeException) { invalidOptions = true; }
             Assert(invalidOptions, "Invalid scan limits rejected.");
@@ -106,6 +135,7 @@ internal static class CarverTests
                 try { using var ignored = PathSafety.OpenRead(alias); } catch (IOException) { deniedAlias = true; }
                 Assert(deniedAlias, "Hard-linked source images are rejected.");
             }
+            else TestCoverage.Skip("carver_hardlinks", "The native hard-link identity fixture requires Windows.");
         }
         finally { CarverFixtures.Cleanup(root); }
         return assertions;
@@ -147,6 +177,19 @@ internal static class CarverFixtures
         byte[] result = new byte[bytes + 41]; prefix.CopyTo(result, 0);
         BinaryPrimitives.WriteUInt32BigEndian(result.AsSpan(33), (uint)(bytes + 1024)); "IDAT"u8.CopyTo(result.AsSpan(37));
         return result;
+    }
+    public static byte[] LargePng()
+    {
+        using var stream = new MemoryStream();
+        stream.Write([137, 80, 78, 71, 13, 10, 26, 10]);
+        byte[] header = new byte[13]; BinaryPrimitives.WriteUInt32BigEndian(header, 256); BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(4), 256); header[8] = 8; header[9] = 2;
+        Chunk(stream, "IHDR", header);
+        byte[] pixels = new byte[(256 * 3 + 1) * 256]; new Random(104729).NextBytes(pixels);
+        for (int row = 0; row < 256; row++) pixels[row * (256 * 3 + 1)] = 0;
+        using var compressed = new MemoryStream();
+        using (var zlib = new ZLibStream(compressed, CompressionLevel.NoCompression, true)) zlib.Write(pixels);
+        Chunk(stream, "IDAT", compressed.ToArray()); Chunk(stream, "IEND", []);
+        return stream.ToArray();
     }
     // A controlled marker fixture, deliberately not represented as a decoded JPEG photograph.
     public static byte[] StructuralJpeg() => [255, 216, 255, 224, 0, 4, 65, 65, 255, 192, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0, 255, 218, 0, 8, 1, 1, 0, 0, 63, 0, 0x12, 0x34, 255, 0, 0x56, 255, 209, 0x78, 255, 217];

@@ -107,7 +107,7 @@ public static class VolumeAcquisition
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Laufwerksabbilder benötigen Windows.");
         var id = NormalizeVolumeId(volumeId);
         var output = PathSafety.CheckPath(destination, false);
-        if (File.Exists(output) || Directory.Exists(output) || File.Exists(output + ".retrace.json")) throw new IOException("Ein neues Abbildziel auswählen. Vorhandene Dateien werden nicht ersetzt.");
+        if (File.Exists(output) || Directory.Exists(output) || File.Exists(output + ".retrace.json") || Directory.Exists(output + ".retrace.json")) throw new IOException("Ein neues Abbildziel auswählen. Vorhandene Dateien werden nicht ersetzt.");
         var parent = Path.GetDirectoryName(output) ?? throw new IOException("Ein vorhandener Zielordner ist erforderlich.");
         if (!Directory.Exists(parent)) throw new IOException("Ein vorhandener Zielordner ist erforderlich.");
         CheckOrdinaryAncestors(parent);
@@ -140,33 +140,41 @@ public static class VolumeAcquisition
     public static async Task<CaptureReport> CaptureStreamAsync(Stream input, long length, string sourceId, string destination,
         IProgress<RecoveryProgress>? progress = null, CancellationToken token = default)
     {
+        ArgumentNullException.ThrowIfNull(input);
+        if (!input.CanRead) throw new ArgumentException("The acquisition input must be readable.", nameof(input));
         if (length <= 0 || length > MaximumVolumeBytes) throw new ArgumentOutOfRangeException(nameof(length));
         var output = PathSafety.CheckPath(destination, false);
         var parent = Path.GetDirectoryName(output)!;
         CheckOrdinaryAncestors(parent);
-        if (!Directory.Exists(parent) || File.Exists(output) || Directory.Exists(output) || File.Exists(output + ".retrace.json")) throw new IOException("Ein neues Abbild unter einem vorhandenen Zielordner auswählen.");
+        if (!Directory.Exists(parent) || File.Exists(output) || Directory.Exists(output) || File.Exists(output + ".retrace.json") || Directory.Exists(output + ".retrace.json")) throw new IOException("Ein neues Abbild unter einem vorhandenen Zielordner auswählen.");
+        token.ThrowIfCancellationRequested();
         var copied = 0L;
         var status = "partial";
         var diagnostics = new List<string>();
         var outputVerified = false;
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        // An exclusive-create failure is not a partial capture owned by this operation. In
+        // particular, never attach a capture receipt to a competing file created after preflight.
+        var target = new FileStream(output, FileMode.CreateNew, FileAccess.Write, FileShare.None, BlockBytes, FileOptions.SequentialScan);
         try
         {
-            using var target = new FileStream(output, FileMode.CreateNew, FileAccess.Write, FileShare.None, BlockBytes, FileOptions.SequentialScan);
-            var buffer = new byte[BlockBytes];
-            while (copied < length)
+            using (target)
             {
-                token.ThrowIfCancellationRequested();
-                var wanted = (int)Math.Min(buffer.Length, length - copied);
-                var read = await input.ReadAsync(buffer.AsMemory(0, wanted), token).ConfigureAwait(false);
-                if (read == 0) throw new EndOfStreamException("Quelle endete vor der angegebenen Größe.");
-                await target.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
-                hash.AppendData(buffer, 0, read);
-                copied += read;
-                progress?.Report(new("capture", copied, length, 0, "Laufwerk wird nur gelesen; Abbild wird auf dem Zieldatenträger gespeichert."));
+                var buffer = new byte[BlockBytes];
+                while (copied < length)
+                {
+                    token.ThrowIfCancellationRequested();
+                    var wanted = (int)Math.Min(buffer.Length, length - copied);
+                    var read = await input.ReadAsync(buffer.AsMemory(0, wanted), token).ConfigureAwait(false);
+                    if (read == 0) throw new EndOfStreamException("Quelle endete vor der angegebenen Größe.");
+                    await target.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
+                    hash.AppendData(buffer, 0, read);
+                    copied += read;
+                    progress?.Report(new("capture", copied, length, 0, "Laufwerk wird nur gelesen; Abbild wird auf dem Zieldatenträger gespeichert."));
+                }
+                target.Flush(flushToDisk: true);
+                status = "copied_unverified";
             }
-            target.Flush(flushToDisk: true);
-            status = "copied_unverified";
         }
         catch (OperationCanceledException) { status = "cancelled"; diagnostics.Add("incomplete_image_retained_do_not_treat_missing_ranges_as_zeros"); }
         catch (IOException) { diagnostics.Add("read_or_write_failed_incomplete_image_retained"); }

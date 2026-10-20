@@ -53,19 +53,28 @@ try
     checks["carver"] = CarverTests.Run();
     checks["video_carver"] = await VideoCarverTests.RunAsync();
     checks["media_integration"] = await MediaIntegrationTests.RunAsync();
+    checks["progress"] = await ProgressTests.RunAsync();
     checks["export"] = ExportTests.Run();
     checks["volume_capture"] = await VolumeTests.RunAsync();
     checks["photorec"] = await PhotoRecTests.RunAsync();
-    checks["large_images"] = await LargeImageTests.RunAsync();
+    if (OperatingSystem.IsWindows()) checks["large_images"] = await LargeImageTests.RunAsync();
+    else TestCoverage.Skip("large_images", "The sparse-file fixture and high-offset native filesystem checks require Windows.");
     checks["investigations"] = await InvestigationTests.RunAsync();
     checks["folders"] = await FolderRecoveryTests.RunAsync();
     checks["recycle_bin"] = await RecycleBinTests.RunAsync();
-    Console.WriteLine(JsonSerializer.Serialize(new { status = "passed", assertions = checks.Values.Sum(), suites = checks }));
+    Console.WriteLine(JsonSerializer.Serialize(new { status = "passed", assertions = checks.Values.Sum(), suites = checks, skipped = TestCoverage.Skipped }));
     return 0;
 }
 catch (Exception ex)
 {
     Console.Error.WriteLine(ex);
-    Console.WriteLine(JsonSerializer.Serialize(new { status = "failed", suites = checks }));
+    Console.WriteLine(JsonSerializer.Serialize(new { status = "failed", suites = checks, skipped = TestCoverage.Skipped }));
     return 1;
+}
+
+internal static class TestCoverage
+{
+    public static Dictionary<string, string> Skipped { get; } = new(StringComparer.Ordinal);
+
+    public static void Skip(string check, string reason) => Skipped[check] = reason;
 }
