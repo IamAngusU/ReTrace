@@ -8,3 +8,5 @@ dist/
 *.raw
 *.zip
 *.tar.bz2
+__pycache__/
+*.pyc

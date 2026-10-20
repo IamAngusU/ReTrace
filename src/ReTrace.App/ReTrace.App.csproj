@@ -5,7 +5,7 @@
     <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.1.0-alpha.5</Version>
+    <Version>0.1.0-alpha.6</Version>
     <AssemblyName>ReTrace</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>

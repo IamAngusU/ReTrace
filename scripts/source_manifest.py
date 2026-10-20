@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def inventory():
     rows = []
-    for name in (".gitattributes", ".gitignore", "LICENSE", "README.md", "THIRD-PARTY-NOTICES.md", ".github", "src", "tests", "scripts", "docs"):
+    for name in (".gitattributes", ".gitignore", "LICENSE", "README.md", "README.de.md", "THIRD-PARTY-NOTICES.md", ".github", "src", "tests", "scripts", "docs"):
         base = ROOT / name
         for path in (sorted(base.rglob("*")) if base.is_dir() else [base]):
             if not path.is_file() or any(part in {"bin", "obj", "__pycache__"} for part in path.relative_to(ROOT).parts):

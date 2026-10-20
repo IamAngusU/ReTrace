@@ -69,7 +69,7 @@ PhotoRec limits and selected format groups are actual engine options. They do
 not turn a timed-out or quota-limited scan into complete coverage.
 
 IamAngusU/ReTrace is the canonical private source repository; angusu-de/ReTrace
-is the CI-only mirror. Hosted billing failures remain separate from the local
+is the CI-only mirror. Hosted runner outcomes remain separate from the local
 Windows checks and do not count as passing CI.
 
 The alpha.2 local C# run passed 193 assertions, including 71 investigation
@@ -176,3 +176,12 @@ tracks. Preceding unrelated/padding atoms, trailing optional metadata, original
 brand and exact original file completeness are not established. Partial or
 unsupported enclosing video containers can suppress ambiguous inner legacy
 interpretations; the profile remains explicitly non-exhaustive.
+
+## README screenshot
+
+The screenshot was captured from the actual WPF workbench using
+`--verify-workbench` and `--render-preview`. The source contains an original
+generated landscape PNG, a deliberately truncated copy and zero padding.
+No personal media or physical device was used. The native scan, preview and
+independently hashed new-file export ran before capture. This demonstrates the
+UI and the bounded fixture workflow, not real-world recovery effectiveness.

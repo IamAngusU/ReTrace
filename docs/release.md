@@ -1,6 +1,6 @@
 # Build and release verification
 
-The current distribution is **0.1.0-alpha.5**, an explicitly limited Windows
+The current distribution is **0.1.0-alpha.6**, an explicitly limited Windows
 x64 preview. A successful test run is not certification of arbitrary damaged
 drives, fragmented recordings, encryption recovery or all Windows hardware.
 
@@ -34,3 +34,10 @@ the identical source. Inspect the actual CI result before claiming CI passed.
 If hosted jobs cannot start, record that limitation separately from local
 verification. Keep the release marked as a prerelease while the product
 remains an alpha; do not rename it stable merely because packaging succeeds.
+
+The package verifier also requires `licenses/PhotoRec-COPYING.txt`,
+`licenses/PhotoRec-AUTHORS.txt`, `LICENSE`, `THIRD-PARTY-NOTICES.md`, the pinned
+unchanged Windows archive and its matching source archive. A self-consistent
+inventory omitting those components is rejected. Run
+`python scripts/test_verify_package.py` for the omission regression checks.
+Both README languages and their local images are included in the portable package.

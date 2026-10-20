@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
+from publish import ASSETS
 
 
 def verify(root):
@@ -28,7 +29,19 @@ def verify(root):
     actual = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file() and p.name != "retrace-package.json"}
     if actual != set(expected):
         raise ValueError("Package contains missing or unlisted members.")
-    return {"version": manifest["version"], "files_verified": len(expected), "all_checks_passed": True}
+    required = {"licenses/PhotoRec-COPYING.txt", "licenses/PhotoRec-AUTHORS.txt",
+                "LICENSE", "THIRD-PARTY-NOTICES.md"}
+    required.update("components/" + name for name in ASSETS)
+    if not required.issubset(expected):
+        raise ValueError("Package is missing required licenses or corresponding PhotoRec source.")
+    for name, (size, sha) in ASSETS.items():
+        path = root / "components" / name
+        if path.stat().st_size != size or expected["components/" + name] != sha:
+            raise ValueError("Official component pin mismatch: " + name)
+    if "GNU GENERAL PUBLIC LICENSE" not in (root / "licenses/PhotoRec-COPYING.txt").read_text(encoding="utf-8"):
+        raise ValueError("PhotoRec GPL license text is missing.")
+    return {"version": manifest["version"], "files_verified": len(expected),
+            "photorec_license_and_source_verified": True, "all_checks_passed": True}
 
 
 if __name__ == "__main__":

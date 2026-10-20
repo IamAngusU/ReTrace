@@ -18,6 +18,8 @@ jobs:
         run: dotnet run --project tests/ReTrace.Tests/ReTrace.Tests.csproj -c Release
       - name: Verify complete source inventory
         run: python scripts/source_manifest.py --verify
+      - name: Reject incomplete license and source inventories
+        run: python scripts/test_verify_package.py
       - name: Build native application
         run: dotnet build src/ReTrace.App/ReTrace.App.csproj -c Release --nologo
       - name: Exercise actual native scan, preview and export
