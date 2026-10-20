@@ -12,6 +12,11 @@ unterstützte Dateistrukturen, teilweise/beschädigte Bilder und ungeprüfte Fun
 Lesbare Vorschauen sind ein zusätzlicher Decoder-Test, kein Beweis für das
 vollständige ursprüngliche Bild. Fehlende Bytes werden nicht erfunden.
 
+Das vollständige Windows-Paket und den zugehörigen Quellstand gibt es unter
+[Releases](https://github.com/IamAngusU/ReTrace/releases). Den portablen Ordner
+vollständig entpacken; die EXE benötigt dessen mitgelieferte Komponenten.
+Build und wiederholbare Freigabeprüfungen: [docs/release.md](docs/release.md).
+
 ## Benutzen
 
 1. `ReTrace.exe` aus dem vollständigen portablen Ordner öffnen.

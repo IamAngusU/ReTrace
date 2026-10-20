@@ -16,6 +16,8 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Test recovery, source guards, output verification and cancellation
         run: dotnet run --project tests/ReTrace.Tests/ReTrace.Tests.csproj -c Release
+      - name: Verify complete source inventory
+        run: python scripts/source_manifest.py --verify
       - name: Build native application
         run: dotnet build src/ReTrace.App/ReTrace.App.csproj -c Release --nologo
       - name: Exercise actual native scan, preview and export
@@ -78,3 +80,14 @@ jobs:
           $binArguments = @('--verify-recycle-workbench', ('"' + $binProof + '"'), '--recycle-root', ('"' + $bin + '"'), '--recycle-entry', $entry.Id, '--render-preview', ('"' + $binImage + '"'))
           $process = Start-Process -FilePath $executable -ArgumentList $binArguments -WindowStyle Hidden -Wait -PassThru
           if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $binProof)) { throw 'Copied-bin verified-copy workflow failed.' }
+      - name: Build and verify the complete offline distribution
+        shell: pwsh
+        run: |
+          python scripts/fetch_components.py .tools
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned component download failed.' }
+          $package = Join-Path $env:RUNNER_TEMP 'retrace-release-package'
+          $proofs = Join-Path $env:RUNNER_TEMP 'retrace-release-verification'
+          python scripts/publish.py $package --assets .tools
+          if ($LASTEXITCODE -ne 0) { throw 'Offline package publication failed.' }
+          python scripts/release_check.py --package $package --work-directory $proofs
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged native release checks failed.' }
