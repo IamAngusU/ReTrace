@@ -108,7 +108,7 @@ python scripts/publish.py D:\ReTrace\new-package --assets .tools
 ```
 
 [Release verification](docs/release.md) · [Validation and limits](docs/validation.md) ·
-[CI runs](https://github.com/angusu-de/ReTrace/actions) ·
+[CI runs](https://github.com/angusu-de/ReTrace-CI/actions) ·
 [Build provenance](https://github.com/IamAngusU/IamAngusU/blob/main/ci.md) ·
 [Third-party licenses and included sources](THIRD-PARTY-NOTICES.md).
 

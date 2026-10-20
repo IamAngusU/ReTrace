@@ -4,7 +4,7 @@ permissions:
   contents: read
 jobs:
   build-and-test:
-    if: github.repository == 'angusu-de/ReTrace'
+    if: github.repository == 'angusu-de/ReTrace-CI'
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
@@ -14,6 +14,8 @@ jobs:
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: '10.0.x'
+      - name: Verify canonical source commit
+        run: python scripts/check_mirror.py
       - name: Test recovery, source guards, output verification and cancellation
         run: dotnet run --project tests/ReTrace.Tests/ReTrace.Tests.csproj -c Release
       - name: Verify complete source inventory

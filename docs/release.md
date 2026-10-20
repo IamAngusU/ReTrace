@@ -29,7 +29,7 @@ accidental modification; neither is a publisher signature. Retain the exact
 source commit and verification proof. Never include personal recovery data,
 disk images, credentials or private case reports in a release.
 
-The primary repository is IamAngusU/ReTrace; angusu-de/ReTrace runs CI against
+The primary repository is IamAngusU/ReTrace; angusu-de/ReTrace-CI runs CI against
 the identical source. Inspect the actual CI result before claiming CI passed.
 If hosted jobs cannot start, record that limitation separately from local
 verification. Keep the release marked as a prerelease while the product

@@ -68,7 +68,7 @@ export with independent output hashes and source-preservation checks. Advanced
 PhotoRec limits and selected format groups are actual engine options. They do
 not turn a timed-out or quota-limited scan into complete coverage.
 
-IamAngusU/ReTrace is the canonical private source repository; angusu-de/ReTrace
+IamAngusU/ReTrace is the canonical private source repository; angusu-de/ReTrace-CI
 is the CI-only mirror. Hosted runner outcomes remain separate from the local
 Windows checks and do not count as passing CI.
 
